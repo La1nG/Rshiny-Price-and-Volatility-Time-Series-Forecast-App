@@ -1,1 +1,43 @@
+library(shiny)
+library(shinythemes)
 
+ui <- fluidPage(
+  theme = shinytheme("darkly"), 
+  titlePanel("Financial Instrument Analysis: GARCH & K-NN Forecasting"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      h3("Input Data"),
+      textInput("ticker", "Ticker Symbol (e.g., AAPL)", value = "AAPL"),
+      dateRangeInput("daterange", "Date Range:",
+                     start = Sys.Date() - 365, end = Sys.Date()),
+      
+      hr(),
+      h3("GARCH Parameters"),
+      sliderInput("alpha", "Alpha (Impact of Past Errors)", min = 0, max = 1, value = 0.05),
+      sliderInput("beta", "Beta (Impact of Past Volatility)", min = 0, max = 1, value = 0.9),
+      
+      hr(),
+      h3("K-NN Parameters"),
+      sliderInput("k", "Number of Neighbors (k)", min = 1, max = 50, value = 3),
+      
+      actionButton("analyze", "Analyze"),
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Overview", 
+                 h4("Model Results"),
+                 verbatimTextOutput("modelSummary")),
+        tabPanel("Forecasts", 
+                 plotlyOutput("forecastPlot"),
+                 hr(),
+                 h4("RMSE vs K (K-NN Performance)"),
+                 plotlyOutput("rmsePlot")),
+        tabPanel("Volatility Analysis", 
+                 h4("Returns and GARCH Volatility Overlay"),
+                 plotlyOutput("volatilityPlot"))
+      )
+    )
+  )
+)
