@@ -17,13 +17,6 @@ K-NN is a regression and classification model that predicts a target value by av
 -
 
 
-## App Output and Insights
-- Overlay stock returns and GARCH-estimated volatility.
-- Visualize how RMSE changes with different 𝑘 values in K-NN
-- Show actual vs. predicted returns as an interactive line plot.
-- Use K-NN regression to forecast returns based on lagged returns and volatility.
-  
-
 
 # Installation
 
