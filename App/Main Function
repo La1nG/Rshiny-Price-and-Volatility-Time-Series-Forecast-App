@@ -1,1 +1,127 @@
+library(shiny)
+library(quantmod)
+library(rugarch)
+library(FNN)
+library(plotly)
 
+server <- function(input, output, session) {
+  
+  # Fetch Data
+  stockData <- eventReactive(input$analyze, {
+    req(input$ticker, input$daterange)
+    tryCatch({
+      data <- getSymbols(input$ticker, src = "yahoo", from = input$daterange[1], to = input$daterange[2], auto.assign = FALSE)
+      na.omit(data)  # Removes NA values from stock data
+    }, error = function(e) {
+      showNotification("Failed to fetch stock data. Please check the ticker or date range.", type = "error")
+      NULL
+    })
+  })
+  
+  # Apply GARCH Model
+  garchModel <- reactive({
+    req(stockData(), input$alpha, input$beta)
+    returns <- na.omit(diff(log(Cl(stockData()))))  # Log returns
+    
+    # Create GARCH with alpha and beta
+    spec <- ugarchspec(
+      variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+      mean.model = list(armaOrder = c(0, 0)),
+      distribution.model = "norm"
+    )
+    
+    # Update alpha and beta
+    spec@model$variance$model$alpha1 <- input$alpha
+    spec@model$variance$model$beta1 <- input$beta
+    
+    # Fit the GARCH model
+    tryCatch({
+      ugarchfit(spec = spec, data = returns)
+    }, error = function(e) {
+      showNotification("GARCH model fitting failed. Check your data or parameter values.", type = "error")
+      NULL
+    })
+  })
+  
+  # GARCH Conditional Variance
+  garchVariance <- reactive({
+    fit <- garchModel()
+    if (!is.null(fit)) sigma(fit)^2 else NULL
+  })
+  
+  # K-NN Model
+  knnResults <- reactive({
+    req(stockData(), input$k)  # Ensure k is properly captured
+    returns <- na.omit(diff(log(Cl(stockData()))))
+    volatility <- garchVariance()
+    
+    if (is.null(volatility)) return(NULL)  # Skips if GARCH failed
+    
+    lagged_returns <- lag(returns, -1)
+    lagged_volatility <- lag(volatility, -1)
+    
+    data <- data.frame(Return = returns[-1],
+                       LaggedReturn = lagged_returns[-1],
+                       LaggedVolatility = lagged_volatility[-1])
+    data <- na.omit(data)
+    
+    train <- data[1:(nrow(data) - 30), ]
+    test <- data[(nrow(data) - 29):nrow(data), ]
+    
+    # Performs K-NN regression
+    pred <- knn.reg(train[, -1], test[, -1], train[, 1], k = input$k)  # Use input$k properly
+    list(predicted = pred$pred, actual = test[, 1], train = train, test = test)
+  })
+  
+  # RMSE Calculation
+  knnRMSE <- reactive({
+    req(knnResults())
+    sqrt(mean((knnResults()$predicted - knnResults()$actual)^2))
+  })
+  
+  # Output: Model Summary
+  output$modelSummary <- renderPrint({
+    fit <- garchModel()
+    if (is.null(fit)) {
+      cat("GARCH model fitting failed.\n")
+    } else {
+      cat("GARCH Summary:\n")
+      print(fit)
+    }
+    cat("\nK-NN RMSE:\n")
+    print(knnRMSE())
+  })
+  
+  # Output: Forecast Plot
+  output$forecastPlot <- renderPlotly({
+    req(knnResults())
+    actual <- knnResults()$actual
+    predicted <- knnResults()$predicted
+    
+    plot_ly() %>%
+      add_trace(x = 1:length(actual), y = actual, name = "Actual Returns", type = "scatter", mode = "lines") %>%
+      add_trace(x = 1:length(predicted), y = predicted, name = "Predicted Returns", type = "scatter", mode = "lines")
+  })
+  
+  # Output: RMSE vs K Plot
+  output$rmsePlot <- renderPlotly({
+    req(knnResults())
+    train <- knnResults()$train
+    test <- knnResults()$test
+    
+    ks <- 1:50
+    rmses <- sapply(ks, function(k) {
+      pred <- knn.reg(train[, -1], test[, -1], train[, 1], k = k)
+      sqrt(mean((pred$pred - test[, 1])^2))
+    })
+    
+    plot_ly(x = ks, y = rmses, type = "scatter", mode = "lines", name = "RMSE vs K") %>%
+      layout(title = "RMSE vs Number of Neighbors (K)",
+             xaxis = list(title = "K"), yaxis = list(title = "RMSE"))
+  })
+  
+  # Output: Volatility Overlay Plot
+  output$volatilityPlot <- renderPlotly({
+    req(stockData(), garchVariance())
+    dates <- index(stockData())
+    
