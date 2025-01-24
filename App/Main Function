@@ -49,6 +49,38 @@ server <- function(input, output, session) {
     if (!is.null(fit)) sigma(fit)^2 else NULL
   })
   
+  # GARCH Forecasting
+  garchForecast <- reactive({
+    fit <- garchModel()
+    if (!is.null(fit)) {
+      forecast <- ugarchforecast(fit, n.ahead = 10)  # Forecast 10 periods ahead
+      forecast
+    } else {
+      NULL
+    }
+  })
+  
+  # Rolling Window for GARCH Estimation
+  rollingGARCH <- reactive({
+    req(stockData())
+    window_size <- 200  # Rolling window size (e.g., 200 days)
+    returns <- na.omit(diff(log(Cl(stockData()))))
+    n <- length(returns)
+    
+    rolling_volatility <- numeric(n - window_size + 1)
+    
+    for (i in window_size:n) {
+      fit <- ugarchfit(spec = ugarchspec(
+        variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+        mean.model = list(armaOrder = c(0, 0)),
+        distribution.model = "norm"
+      ), data = returns[(i - window_size + 1):i])
+      rolling_volatility[i - window_size + 1] <- sigma(fit)[length(sigma(fit))]
+    }
+    
+    rolling_volatility
+  })
+  
   # K-NN Model
   knnResults <- reactive({
     req(stockData(), input$k)  # Ensure k is properly captured
@@ -78,6 +110,38 @@ server <- function(input, output, session) {
     req(knnResults())
     sqrt(mean((knnResults()$predicted - knnResults()$actual)^2))
   })
+  
+  # VaR Calculation
+  calculateVaR <- reactive({
+    fit <- garchModel()
+    if (!is.null(fit)) {
+      var_95 <- quantile(sigma(fit), 0.05)  # Value-at-risk at 95% confidence
+      var_95
+    } else {
+      NULL
+    }
+  })
+  
+  # Sharpe Ratio Calculation
+  calculateSharpeRatio <- reactive({
+    req(stockData())
+    returns <- na.omit(diff(log(Cl(stockData()))))
+    risk_free_rate <- 0.02  # Assume a constant risk-free rate (2%)
+    excess_returns <- returns - risk_free_rate / 252  # Daily risk-free rate
+    volatility <- sd(excess_returns)  # Standard deviation of returns as volatility
+    mean_return <- mean(excess_returns)
+    
+    sharpe_ratio <- mean_return / volatility
+    sharpe_ratio
+  })
+  
+  # Black-Scholes Option Pricing
+  blackScholesPrice <- function(S, K, T, r, sigma) {
+    d1 <- (log(S/K) + (r + 0.5 * sigma^2) * T) / (sigma * sqrt(T))
+    d2 <- d1 - sigma * sqrt(T)
+    price <- S * pnorm(d1) - K * exp(-r * T) * pnorm(d2)
+    return(price)
+  }
   
   # Output: Model Summary
   output$modelSummary <- renderPrint({
@@ -124,4 +188,53 @@ server <- function(input, output, session) {
   output$volatilityPlot <- renderPlotly({
     req(stockData(), garchVariance())
     dates <- index(stockData())
+    volatility <- garchVariance()
     
+    plot_ly(x = dates, y = volatility, type = "scatter", mode = "lines", name = "Predicted Volatility")
+  })
+  
+  # Output: Rolling Volatility Plot
+  output$rollingVolatilityPlot <- renderPlotly({
+    req(rollingGARCH())
+    rolling_volatility <- rollingGARCH()
+    dates <- index(stockData())[length(stockData()) - length(rolling_volatility) + 1:length(stockData())]
+    
+    plot_ly(x = dates, y = rolling_volatility, type = "scatter", mode = "lines", name = "Rolling Volatility")
+  })
+  
+  # Output: GARCH Forecast Plot
+  output$garchForecastPlot <- renderPlotly({
+    req(garchForecast())
+    forecast_data <- garchForecast()
+    forecast_values <- forecast_data@forecast$meanForecast
+    forecast_dates <- (index(stockData())[length(stockData()):length(stockData())] + 1):(length(forecast_values) + length(stockData()))
+    
+    plot_ly(x = forecast_dates, y = forecast_values, type = "scatter", mode = "lines", name = "GARCH Forecast")
+  })
+  
+  # Output: VaR Result
+  output$varResult <- renderText({
+    req(calculateVaR())
+    paste("1-day VaR (95% confidence):", round(calculateVaR(), 4))
+  })
+  
+  # Output: Sharpe Ratio Result
+  output$sharpeRatioResult <- renderText({
+    req(calculateSharpeRatio())
+    paste("Sharpe Ratio:", round(calculateSharpeRatio(), 2))
+  })
+  
+  # Output: Option Price
+  output$optionPrice <- renderText({
+    req(garchVariance())
+    S <- 100  # Stock price
+    K <- 105  # Strike price
+    T <- 30/365  # Time to maturity in years (e.g., 30 days)
+    r <- 0.02  # Risk-free rate
+    sigma <- mean(garchVariance())  # Volatility from GARCH
+    
+    price <- blackScholesPrice(S, K, T, r, sigma)
+    paste("Option Price:", round(price, 2))
+  })
+}
+
