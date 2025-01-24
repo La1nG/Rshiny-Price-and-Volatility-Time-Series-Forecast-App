@@ -23,5 +23,5 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 
 
 Working on: 
-- Fix Alpha and Beta slider 
+- Fixing some graphs
 - Backtesting for accuracy
