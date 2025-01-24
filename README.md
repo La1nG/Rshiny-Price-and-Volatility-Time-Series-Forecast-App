@@ -22,4 +22,6 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 
 
 
-Working on: Alpha and Beta slider not connecting 
+Working on: 
+- Alpha and Beta slider not adjusting variables (K-NN variables work)
+- Backtesting for accuracy
