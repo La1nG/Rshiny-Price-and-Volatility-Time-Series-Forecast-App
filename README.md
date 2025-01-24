@@ -10,6 +10,16 @@ K-NN is a regression and classification model that predicts a target value by av
 
 
 # Installation
+Five libraries must be installed which can all be done with a single line in `R`:
 
+```bash
+install.packages(c("shiny", "quantmod", "rugarch", "FNN", "plotly"))
+```
 
 # Set Up and Running the App
+
+After the libraries are installed into an R IDE such as RStudio you should then set up a Rshiny web app file/folder then you can copy/paste the server logic into the server console and UI into UI console then run app. Variables are adjustable in-app through sliders.
+
+
+
+Working on: Alpha and Beta slider not connecting 
