@@ -101,3 +101,15 @@ Joint Effect: This test combines the effect of the above 3 bias' into a single m
 As `p < 0.05`, the joint effect is not signficant, supporting that the model effectively captures asymmetry for volatility.
 
 ### Adjust Pearson Goodness-of-Fit Test
+
+The adjusted Pearson Goodness-Of-Fit Test evaluates whether the residual of the GARCH model follow the assumed (normal) distribution, the model aims to compare observed frequencies of residuals from predefined groups (bins) against the expected frequencies assumed from the models normal distribution.
+
+`Null Hypothesis (H0): The residuals are well-modeled by the distribution`
+
+`Alternative Hypothesis (Ha): The residuals deviate signficantly from the distribution`
+
+- Larger values indicate greater discrepancy.
+
+All p-values for the groupings in the test table are above common signficance levels (0.05, 0.01, 0.10), thus indicating no signficant deviation.  Justifying that the Assumptions the the residuals of AAPL followed the assumed normal distribution and is able to capture volatility dynamics.
+
+
