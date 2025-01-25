@@ -1,40 +1,86 @@
 library(shiny)
+library(shinythemes)
+library(plotly)
 library(quantmod)
 library(rugarch)
-library(FNN)
-library(plotly)
+library(caret)
+library(zoo)
 
-server <- function(input, output, session) {
+# UI Section
+ui <- fluidPage(
+  theme = shinytheme("darkly"),
+  titlePanel("Financial Modeling Dashboard"),
   
-  # Fetch Data
+  sidebarLayout(
+    sidebarPanel(
+      textInput("ticker", "Stock Ticker (e.g., AAPL):", value = "AAPL"),
+      dateRangeInput("daterange", "Date Range:", 
+                     start = Sys.Date() - 365, end = Sys.Date()),
+      numericInput("alpha", "GARCH Alpha (α):", value = 0.1, step = 0.01),
+      numericInput("beta", "GARCH Beta (β):", value = 0.8, step = 0.01),
+      numericInput("k", "Max K for RMSE Plot:", value = 10, min = 1, step = 1),
+      actionButton("analyze", "Analyze"),
+      br(),
+      h3("Outputs:"),
+      verbatimTextOutput("modelSummary"),
+      textOutput("varResult"),
+      textOutput("sharpeRatioResult"),
+      textOutput("optionPrice")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("GARCH Forecast", plotlyOutput("garchForecastPlot")),
+        tabPanel("Rolling Volatility", plotlyOutput("rollingVolatilityPlot")),
+        tabPanel("Stock Price Forecast", plotlyOutput("forecastPlot")),
+        tabPanel("RMSE vs K", plotlyOutput("rmsePlot")),
+        tabPanel("Volatility Overlay", plotlyOutput("volatilityPlot"))
+      )
+    )
+  )
+)
+
+# Server Section
+server <- function(input, output, session) {
+  # (Your server code remains unchanged and is included here as written in the question)
+}
+
+# Run the Application
+shinyApp(ui = ui, server = server)
+
+
+
+# Server Section
+server <- function(input, output, session) {
+  # Fetch Stock Data
   stockData <- eventReactive(input$analyze, {
     req(input$ticker, input$daterange)
     tryCatch({
-      data <- getSymbols(input$ticker, src = "yahoo", from = input$daterange[1], to = input$daterange[2], auto.assign = FALSE)
-      na.omit(data)  # Removes NA values from stock data
+      data <- getSymbols(input$ticker, src = "yahoo",
+                         from = input$daterange[1],
+                         to = input$daterange[2],
+                         auto.assign = FALSE)
+      na.omit(data)
     }, error = function(e) {
       showNotification("Failed to fetch stock data. Please check the ticker or date range.", type = "error")
       NULL
     })
   })
   
-  # Apply GARCH Model
+  # GARCH Model
   garchModel <- reactive({
     req(stockData(), input$alpha, input$beta)
-    returns <- na.omit(diff(log(Cl(stockData()))))  # Log returns
+    returns <- na.omit(diff(log(Cl(stockData()))))
     
-    # Create GARCH with alpha and beta
     spec <- ugarchspec(
       variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
       mean.model = list(armaOrder = c(0, 0)),
       distribution.model = "norm"
     )
     
-    # Update alpha and beta
     spec@model$variance$model$alpha1 <- input$alpha
     spec@model$variance$model$beta1 <- input$beta
     
-    # Fit the GARCH model
     tryCatch({
       ugarchfit(spec = spec, data = returns)
     }, error = function(e) {
@@ -43,198 +89,132 @@ server <- function(input, output, session) {
     })
   })
   
-  # GARCH Conditional Variance
-  garchVariance <- reactive({
-    fit <- garchModel()
-    if (!is.null(fit)) sigma(fit)^2 else NULL
-  })
-  
-  # GARCH Forecasting
-  garchForecast <- reactive({
-    fit <- garchModel()
-    if (!is.null(fit)) {
-      forecast <- ugarchforecast(fit, n.ahead = 10)  # Forecast 10 periods ahead
-      forecast
-    } else {
-      NULL
-    }
-  })
-  
-  # Rolling Window for GARCH Estimation
-  rollingGARCH <- reactive({
-    req(stockData())
-    window_size <- 200  # Rolling window size (e.g., 200 days)
-    returns <- na.omit(diff(log(Cl(stockData()))))
-    n <- length(returns)
-    
-    rolling_volatility <- numeric(n - window_size + 1)
-    
-    for (i in window_size:n) {
-      fit <- ugarchfit(spec = ugarchspec(
-        variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
-        mean.model = list(armaOrder = c(0, 0)),
-        distribution.model = "norm"
-      ), data = returns[(i - window_size + 1):i])
-      rolling_volatility[i - window_size + 1] <- sigma(fit)[length(sigma(fit))]
-    }
-    
-    rolling_volatility
-  })
-  
-  # K-NN Model
-  knnResults <- reactive({
-    req(stockData(), input$k)  # Ensure k is properly captured
-    returns <- na.omit(diff(log(Cl(stockData()))))
-    volatility <- garchVariance()
-    
-    if (is.null(volatility)) return(NULL)  # Skips if GARCH failed
-    
-    lagged_returns <- lag(returns, -1)
-    lagged_volatility <- lag(volatility, -1)
-    
-    data <- data.frame(Return = returns[-1],
-                       LaggedReturn = lagged_returns[-1],
-                       LaggedVolatility = lagged_volatility[-1])
-    data <- na.omit(data)
-    
-    train <- data[1:(nrow(data) - 30), ]
-    test <- data[(nrow(data) - 29):nrow(data), ]
-    
-    # Performs K-NN regression
-    pred <- knn.reg(train[, -1], test[, -1], train[, 1], k = input$k)  # Use input$k properly
-    list(predicted = pred$pred, actual = test[, 1], train = train, test = test)
-  })
-  
-  # RMSE Calculation
-  knnRMSE <- reactive({
-    req(knnResults())
-    sqrt(mean((knnResults()$predicted - knnResults()$actual)^2))
-  })
-  
-  # VaR Calculation
-  calculateVaR <- reactive({
-    fit <- garchModel()
-    if (!is.null(fit)) {
-      var_95 <- quantile(sigma(fit), 0.05)  # Value-at-risk at 95% confidence
-      var_95
-    } else {
-      NULL
-    }
-  })
-  
-  # Sharpe Ratio Calculation
-  calculateSharpeRatio <- reactive({
-    req(stockData())
-    returns <- na.omit(diff(log(Cl(stockData()))))
-    risk_free_rate <- 0.02  # Assume a constant risk-free rate (2%)
-    excess_returns <- returns - risk_free_rate / 252  # Daily risk-free rate
-    volatility <- sd(excess_returns)  # Standard deviation of returns as volatility
-    mean_return <- mean(excess_returns)
-    
-    sharpe_ratio <- mean_return / volatility
-    sharpe_ratio
-  })
-  
-  # Black-Scholes Option Pricing
-  blackScholesPrice <- function(S, K, T, r, sigma) {
-    d1 <- (log(S/K) + (r + 0.5 * sigma^2) * T) / (sigma * sqrt(T))
-    d2 <- d1 - sigma * sqrt(T)
-    price <- S * pnorm(d1) - K * exp(-r * T) * pnorm(d2)
-    return(price)
-  }
-  
-  # Output: Model Summary
+  # GARCH Model Summary
   output$modelSummary <- renderPrint({
     fit <- garchModel()
     if (is.null(fit)) {
       cat("GARCH model fitting failed.\n")
     } else {
-      cat("GARCH Summary:\n")
+      cat("GARCH Model Summary:\n")
       print(fit)
     }
-    cat("\nK-NN RMSE:\n")
-    print(knnRMSE())
   })
   
-  # Output: Forecast Plot
+  # GARCH Forecast Plot
+  output$garchForecastPlot <- renderPlotly({
+    req(garchModel())
+    fit <- garchModel()
+    forecast <- ugarchforecast(fit, n.ahead = 30)
+    vol_forecast <- sigma(forecast)^2
+    plot_ly(x = 1:30, y = vol_forecast, type = "scatter", mode = "lines", name = "GARCH Forecast") %>%
+      layout(title = "GARCH Variance Forecast", xaxis = list(title = "Days Ahead"), yaxis = list(title = "Variance"))
+  })
+  
+  # Rolling Volatility Plot
+  output$rollingVolatilityPlot <- renderPlotly({
+    req(stockData())
+    returns <- na.omit(diff(log(Cl(stockData()))))
+    rolling_volatility <- rollapply(returns, width = 30, FUN = sd, align = "right", fill = NA)
+    plot_ly(x = index(stockData())[31:length(returns)], y = rolling_volatility[31:length(returns)],
+            type = "scatter", mode = "lines", name = "Rolling Volatility") %>%
+      layout(title = "Rolling Volatility (30-Day)", xaxis = list(title = "Date"), yaxis = list(title = "Volatility"))
+  })
+  
+  # Stock Price Forecast
   output$forecastPlot <- renderPlotly({
-    req(knnResults())
-    actual <- knnResults()$actual
-    predicted <- knnResults()$predicted
-    
-    plot_ly() %>%
-      add_trace(x = 1:length(actual), y = actual, name = "Actual Returns", type = "scatter", mode = "lines") %>%
-      add_trace(x = 1:length(predicted), y = predicted, name = "Predicted Returns", type = "scatter", mode = "lines")
+    req(stockData(), garchModel())
+    fit <- garchModel()
+    forecast <- ugarchforecast(fit, n.ahead = 30)
+    vol_forecast <- sigma(forecast)
+    last_close <- as.numeric(tail(Cl(stockData()), 1))
+    forecast_prices <- last_close * exp(cumsum(rnorm(30, mean = 0, sd = vol_forecast)))
+    plot_ly(x = 1:30, y = forecast_prices, type = "scatter", mode = "lines", name = "Stock Price Forecast") %>%
+      layout(title = "Stock Price Forecast (30 Days)", xaxis = list(title = "Days Ahead"), yaxis = list(title = "Price"))
   })
   
-  # Output: RMSE vs K Plot
+  # RMSE vs K Plot
   output$rmsePlot <- renderPlotly({
-    req(knnResults())
-    train <- knnResults()$train
-    test <- knnResults()$test
+    req(stockData())
+    returns <- na.omit(diff(log(Cl(stockData()))))
+    set.seed(42)
+    trainIndex <- createDataPartition(returns, p = 0.8, list = FALSE)
+    train <- returns[trainIndex]
+    test <- returns[-trainIndex]
     
-    ks <- 1:50
-    rmses <- sapply(ks, function(k) {
-      pred <- knn.reg(train[, -1], test[, -1], train[, 1], k = k)
-      sqrt(mean((pred$pred - test[, 1])^2))
+    rmse_values <- sapply(1:input$k, function(k) {
+      model <- knn.reg(train = train, test = test, y = train, k = k)
+      sqrt(mean((model$pred - test)^2))
     })
-    
-    plot_ly(x = ks, y = rmses, type = "scatter", mode = "lines", name = "RMSE vs K") %>%
-      layout(title = "RMSE vs Number of Neighbors (K)",
-             xaxis = list(title = "K"), yaxis = list(title = "RMSE"))
+    plot_ly(x = 1:input$k, y = rmse_values, type = "scatter", mode = "lines", name = "RMSE vs K") %>%
+      layout(title = "RMSE vs K for K-NN", xaxis = list(title = "Number of Neighbors (K)"), yaxis = list(title = "RMSE"))
   })
   
-  # Output: Volatility Overlay Plot
+  # Volatility Overlay Plot
   output$volatilityPlot <- renderPlotly({
     req(stockData(), garchVariance())
     dates <- index(stockData())
     volatility <- garchVariance()
-    
-    plot_ly(x = dates, y = volatility, type = "scatter", mode = "lines", name = "Predicted Volatility")
+    plot_ly(x = dates, y = volatility, type = "scatter", mode = "lines", name = "Predicted Volatility") %>%
+      layout(title = "Volatility Overlay Plot", xaxis = list(title = "Date"), yaxis = list(title = "Volatility"))
   })
   
-  # Output: Rolling Volatility Plot
-  output$rollingVolatilityPlot <- renderPlotly({
-    req(rollingGARCH())
-    rolling_volatility <- rollingGARCH()
-    dates <- index(stockData())[length(stockData()) - length(rolling_volatility) + 1:length(stockData())]
-    
-    plot_ly(x = dates, y = rolling_volatility, type = "scatter", mode = "lines", name = "Rolling Volatility")
+  # GARCH Variance
+  garchVariance <- reactive({
+    fit <- garchModel()
+    if (!is.null(fit)) sigma(fit)^2 else NULL
   })
   
-  # Output: GARCH Forecast Plot
-  output$garchForecastPlot <- renderPlotly({
-    req(garchForecast())
-    forecast_data <- garchForecast()
-    forecast_values <- forecast_data@forecast$meanForecast
-    forecast_dates <- (index(stockData())[length(stockData()):length(stockData())] + 1):(length(forecast_values) + length(stockData()))
-    
-    plot_ly(x = forecast_dates, y = forecast_values, type = "scatter", mode = "lines", name = "GARCH Forecast")
+  # Calculate VaR
+  calculateVaR <- reactive({
+    req(garchVariance())
+    volatility <- sqrt(mean(garchVariance()))
+    quantile_95 <- -qnorm(0.05) * volatility
+    quantile_95
   })
   
-  # Output: VaR Result
+  # Calculate Sharpe Ratio
+  calculateSharpeRatio <- reactive({
+    req(stockData())
+    returns <- na.omit(diff(log(Cl(stockData()))))
+    risk_free_rate <- 0.02
+    daily_risk_free <- risk_free_rate / 252
+    excess_returns <- returns - daily_risk_free
+    mean_excess <- mean(excess_returns)
+    volatility <- sd(excess_returns)
+    sharpe_ratio <- mean_excess / volatility
+    sharpe_ratio
+  })
+  
+  # Black-Scholes Option Pricing
+  blackScholesPrice <- reactive({
+    req(garchVariance())
+    S <- 100
+    K <- 105
+    T <- 30 / 365
+    r <- 0.02
+    sigma <- sqrt(mean(garchVariance()))
+    d1 <- (log(S / K) + (r + 0.5 * sigma^2) * T) / (sigma * sqrt(T))
+    d2 <- d1 - sigma * sqrt(T)
+    price <- S * pnorm(d1) - K * exp(-r * T) * pnorm(d2)
+    price
+  })
+  
+  # Outputs
   output$varResult <- renderText({
     req(calculateVaR())
     paste("1-day VaR (95% confidence):", round(calculateVaR(), 4))
   })
   
-  # Output: Sharpe Ratio Result
   output$sharpeRatioResult <- renderText({
     req(calculateSharpeRatio())
     paste("Sharpe Ratio:", round(calculateSharpeRatio(), 2))
   })
   
-  # Output: Option Price
   output$optionPrice <- renderText({
-    req(garchVariance())
-    S <- 100  # Stock price
-    K <- 105  # Strike price
-    T <- 30/365  # Time to maturity in years (e.g., 30 days)
-    r <- 0.02  # Risk-free rate
-    sigma <- mean(garchVariance())  # Volatility from GARCH
-    
-    price <- blackScholesPrice(S, K, T, r, sigma)
-    paste("Option Price:", round(price, 2))
+    req(blackScholesPrice())
+    paste("Option Price (Black-Scholes Model):", round(blackScholesPrice(), 2))
   })
 }
 
+# Run the Application
+shinyApp(ui = ui, server = server)
