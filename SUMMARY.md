@@ -62,5 +62,18 @@ Weighted ARCH LM (Langrange Multiplier) Tests evaluate whether there is any ARCH
 - At lag [7], the trend follows and supports the conclusion that there is no residual ARCH effect. Effectively capturing long-term volatility.
 
 
-​
+​### Nyblom Stability Test
+
+Nyblom Stability Test evaluates for the stability in estimated parameters in the GARCH model over time.
+
+`Null Hypothesis (H0): The parameters of the GARCH model are stable over time`
+
+`Alternative Hypothesis (Ha): One or more parameters vary over time, indicatiing instability`
+
+Joint statistic = 37.254
+The joint statistic is a summary statistic used for evaluting the stability of all parameters, jointly. A higher value indicates a greater instability.
+
+Comparing the joint statistic to the asymptotic critical values, the statistic greatly exceeds even the 1% (1.60) value. Strongly rejecting the null hypothesis and indicating that the models parameters are `not` stable over time.
+
+mu (`0.1580`), ARCH term (`0.1695`), and GARCH term (`0.1972`) show are represent by small value statistics, showing small contributions to the joint statistic. Omega, at `8.6135` contributes signficantly to the joint statistic, also potentially indicating that the baseline level of volatility for AAPL may have shifted over time possibly due to market changes, macroeconomic events, trading behaviour etc.
  
