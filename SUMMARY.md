@@ -35,19 +35,31 @@ HQC is used for moderate-length time series where neither extreme overfitting (p
 ### Weighted Ljung-Box Test on Standardized Residuals
 The Weighted Ljung-Box Test is a diagnostic tool to assess the adequacy of the GARCH model. Testing for autocorrelation in the standardized residuals (raw residuals / their estimated standard deviations).
 
-Null Hypothesis (H0): There is no serial correlation in the standardized residuals.
-Alternative Hypothesis (Ha): There is serial correlation in the standardized residuals.
+`Null Hypothesis (H0): There is no serial correlation in the standardized residuals.`
+
+`Alternative Hypothesis (Ha): There is serial correlation in the standardized residuals.`
 
 The p-values for all lags are greater than typical signficance levels, thus we fail to reject the null hypothesis H0. No signficant serial correlation is present in the standardized residuals which tells us that the GARCH model adequately captures linear dependancies in AAPL's returns and that past information for future volatility predictions are effectively accounted for.
 
 ### Weighted Ljung-Box Test on Standardized Squared Residuals
 
-Null Hypothesis (H0): There is no serial correlation in the standardized squared residuals.
-Alternative Hypothesis (Ha): There is serial correlation in the standardized squared residuals.
+`Null Hypothesis (H0): There is no serial correlation in the standardized squared residuals.`
+
+`Alternative Hypothesis (Ha): There is serial correlation in the standardized squared residuals.`
 
 Again, Null hypothesis is rejected. The abscence of serial correlation if squared residuals confirms that the GARCH model successfully captures volatility clustering (the tendency for high-volatility periods to follow other high-volatility periods) for AAPL.
 
-### ARCH LM Test
+### Weighted ARCH LM Test
+
+Weighted ARCH LM (Langrange Multiplier) Tests evaluate whether there is any ARCH (Autoregressive Conditional Heteroskedasticity) effect remaining in the residuals of the GARCH model.
+
+`Null Hypothesis (H0): There is no ARCH effect remaining in the residuals, indicating the model was sufficient in capturing volatility clustering`
+
+`Alternative Hypothesis (Ha): There is ARCH effects still present in the model, indicating model misspecification`
+
+- At Lag [3], the low statistic `0.09096` and high p-value `0.7630` suggests the model effectively captured short-term volatility clustering
+- At lag [5], a higher statistic `0.63848` and high p-value `0.8421`, suggests the model effectively captured intermediate volatility clustering
+- At lag [7], the trend follows and supports the conclusion that there is no residual ARCH effect. Effectively capturing long-term volatility.
 
 
 ​
