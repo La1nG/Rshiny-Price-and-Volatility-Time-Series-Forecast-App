@@ -86,8 +86,18 @@ The sign Bias Test is used to check whether the GARCH model adequately captures 
 
 `Alternative Hypothesis (Ha): The model fails to account for asymmetry, suggesting that positive and negative shocks have differing volatiltiy that the model does not explain`
 
-Sign Bias:
+Sign Bias/Overall Asymmetry: This test meansures where positive and negative shocks to returns have different effects on volatility on average.
 
-Negative Sign:
+The high p-value of `0.9103` suggets no evidence of an overall sign bias in the model, indicating it adequately captured average asymmetry.
 
-Postive Sign:
+Negative Sign: This test measures whether the model underestimates or overestimates the impact of negative shocks on volatility, such as sharp price drops.
+
+Postive Sign: This test measures whether the model underestimates or overestimates the impact of negative shocks on volatility, such as sharp price increases.
+
+The relatively lower Positive Sign P-value of `0.1091` compared to the Negative Sign P-value of `0.4077` potentially indicates that bullish price moves have an underestimated impact on volatility for AAPL.
+
+Joint Effect: This test combines the effect of the above 3 bias' into a single model to test overall adequacy in capturing asymmetry.
+
+As `p < 0.05`, the joint effect is not signficant, supporting that the model effectively captures asymmetry for volatility.
+
+### Adjust Pearson Goodness-of-Fit Test
