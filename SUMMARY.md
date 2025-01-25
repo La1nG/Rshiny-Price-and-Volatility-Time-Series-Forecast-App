@@ -32,7 +32,22 @@ HQC is calculated as, `HQC=2kln(ln(n))−2ln(L)`, HQC imposes a penalty stricter
 HQC is used for moderate-length time series where neither extreme overfitting (penalised by AIC) nor excessive simplicity (encouraged by BIC) is desired.
 
 
+### Weighted Ljung-Box Test on Standardized Residuals
+The Weighted Ljung-Box Test is a diagnostic tool to assess the adequacy of the GARCH model. Testing for autocorrelation in the standardized residuals (raw residuals / their estimated standard deviations).
 
+Null Hypothesis (H0): There is no serial correlation in the standardized residuals.
+Alternative Hypothesis (Ha): There is serial correlation in the standardized residuals.
+
+The p-values for all lags are greater than typical signficance levels, thus we fail to reject the null hypothesis H0. No signficant serial correlation is present in the standardized residuals which tells us that the GARCH model adequately captures linear dependancies in AAPL's returns and that past information for future volatility predictions are effectively accounted for.
+
+### Weighted Ljung-Box Test on Standardized Squared Residuals
+
+Null Hypothesis (H0): There is no serial correlation in the standardized squared residuals.
+Alternative Hypothesis (Ha): There is serial correlation in the standardized squared residuals.
+
+Again, Null hypothesis is rejected. The abscence of serial correlation if squared residuals confirms that the GARCH model successfully captures volatility clustering (the tendency for high-volatility periods to follow other high-volatility periods) for AAPL.
+
+### ARCH LM Test
 
 
 ​
