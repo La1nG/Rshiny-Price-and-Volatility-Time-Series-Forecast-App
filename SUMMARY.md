@@ -1,6 +1,6 @@
 # GARCH Model Summary Interpretations
 
-This file guides and explains how to interpret results shown in the GARCH Model Summary, using the Example Model AAPL file as a reference.
+This file guides and explains how to interpret results shown in the GARCH Model Summary, using the `Example Model AAPL` file as a reference.
 
 
 ### Optimal Parameters / Robust Standard Error
