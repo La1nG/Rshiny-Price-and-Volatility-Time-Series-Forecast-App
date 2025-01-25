@@ -29,4 +29,4 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 
 Working on: 
 - sliders
-- volatility overlay, rolling overlay graphs
+- volatility overlay, rolling volatility graphs
