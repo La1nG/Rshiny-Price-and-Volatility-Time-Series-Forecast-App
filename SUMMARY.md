@@ -12,6 +12,28 @@ This file guides and explains how to interpret results shown in the GARCH Model 
 Diference between `Optimal Parameters` and `robust standard error`: the robust standard errpr summary accounts for potential misspecification or model assumptions.
 
 ### Log-Liklihood
+Log-Liklihood measures the overall fit of the model (GARCH) to the data, higher values indicate a better fit. The Log-Liklihood value of 701.7981 indicates that the GARCH(1,1) model effectively explains AAPL's return and volatility patterns
+
+### Information Criteria
+Information Criteria are statistical tools that are used to evaluate model performance and balance between goodness-of-fit and model complexity. Each criterion (Akaike, Bayes, SHibata, Hannan-Quinn) penalises overfitting differently.
+
+- Akaike Information Critieria (AIC)
+AIC is calculated as: `AIC=2k−2ln(L)`, where k = the number of parameters, and ln(L) = the log-likelihood of the model. Lower AIC values indicate more efficient models, as goodness-of-fit is balanced (through log-likelihood), with penalty to model complexity (number of parameters). A value of `-5.6048` siggests the model provides a good fit while avoiding overfitting,
+
+- Bayesian Information Criteria (BIC)
+BIC is calculated as, `BIC=ln(n)k−2ln(L)`, BIC operates similarly to AIC except for the BIC penalises model complexity (number of parameters, k) more severely, especially as n increases. A slightly higher value of `-5.5483` is expected due to the stricter penalisation. Further confirming that the dataset is not overfitted.
+BIC is particularly useful in contexts where long-term forecasting is required from models.
+
+- Shibata Criterion
+The Shibata Criterion is a variation of AIC specifically designed for stationary process such as GARCH models. Shibata penalises complexity less than AIC, expectedly leading to lower values. In this Summary the shibata value of `-5.6053` is close to the AIC when shows that the GARCH(1,1) model is appropriate for AAPL''s volatility.
+
+- Hannan-Quinn Criterion (HQC)
+HQC is calculated as, `HQC=2kln(ln(n))−2ln(L)`, HQC imposes a penalty stricter than AIC, but less sensitive to parameter size than BIC. A value of `-5.5821` suggests a strong fit model and appropriate complexity.
+HQC is used for moderate-length time series where neither extreme overfitting (penalised by AIC) nor excessive simplicity (encouraged by BIC) is desired.
+
+
+
+
 
 ​
  
