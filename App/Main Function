@@ -138,7 +138,8 @@ server <- function(input, output, session) {
     mean_excess <- mean(excess_returns)
     volatility <- sd(excess_returns)
     sharpe_ratio <- mean_excess / volatility
-    sharpe_ratio
+    annualised_sharpe_ratio <- sharpe_ratio * sqrt(252)
+    annualised_sharpe_ratio
   })
   
   # Black-Scholes Option Pricing
