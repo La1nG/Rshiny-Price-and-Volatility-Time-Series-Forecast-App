@@ -4,7 +4,7 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 ## Features:
 - Stock Price Forecasting
 - Volatility Dynamics Analysis and Forecasting
-- Annualized Sharpe, VaR
+- Annualized Sharpe, Annualized VaR
 - Black Scholes Model and European Option Pricing, this can be changed by adjusting the pricing formula.
 
 
