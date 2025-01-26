@@ -125,6 +125,7 @@ server <- function(input, output, session) {
   calculateVaR <- reactive({
     req(garchVariance())
     volatility <- sqrt(mean(garchVariance()))
+    annualized_volatility <- volatility * sqrt(252)
     quantile_95 <- -qnorm(0.05) * volatility
     quantile_95
   })
