@@ -82,8 +82,9 @@ server <- function(input, output, session) {
     fit <- garchModel()
     forecast <- ugarchforecast(fit, n.ahead = 30)
     vol_forecast <- sigma(forecast)
+    mu <- coef(fit)["mu"]
     last_close <- as.numeric(tail(Cl(stockData()), 1))
-    forecast_prices <- last_close * exp(cumsum(rnorm(30, mean = 0, sd = vol_forecast)))
+    forecast_prices <- last_close * exp(cumsum(rnorm(30, mean = mu, sd = vol_forecast)))
     plot_ly(x = 1:30, y = forecast_prices, type = "scatter", mode = "lines", name = "Stock Price Forecast") %>%
       layout(title = "Stock Price Forecast (30 Days)", xaxis = list(title = "Days Ahead"), yaxis = list(title = "Price"))
   })
