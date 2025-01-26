@@ -28,7 +28,7 @@ install.packages(c("shiny", "quantmod", "rugarch", "FNN", "plotly", "caret", "zo
 
 # Set Up and Running the App
 
-After the libraries are installed into an R IDE such as RStudio you should then set up a Rshiny web app file/folder then you can copy/paste the server logic into the server console and UI into UI console then run app. Variables are adjustable in-app through sliders.
+After the libraries are installed into an R IDE such as RStudio you should then set up a Rshiny web app file/folder then you can copy/paste the server logic into the server console and UI into UI console then run app.
 
 
 
