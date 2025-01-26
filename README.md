@@ -2,6 +2,10 @@
 Time series forecasting is a quantitative meathod of analysing data over periods of time with the purpose of predict future trends and patterns.  This R App aims to make an easily manageable tool while providing useful and informative analysis utilising a hybrid approach combining the GARCH (generalized autoregressive conditional heteroskedasticity) and K-NN (k-nearest neighbors) time-series methods.
 
 ## Features:
+- Stock Price Forecasting
+- Volatility Dynamics Analysis and Forecasting
+- Annualized Sharpe, VaR
+- Black Scholes Model and European Option Pricing, this can be changed by adjusting the pricing formula.
 
 
 
@@ -30,3 +34,4 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 Working on: 
 - sliders
 - volatility overlay, rolling volatility graphs
+- Black Scholes Options Pricing
