@@ -34,6 +34,4 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 
 
 Working on: 
-- volatility overlay, rolling volatility graphs
-- Black Scholes Options Pricing
-- Formatting
+- Value At Risk & Expected Shortfall 
