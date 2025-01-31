@@ -41,11 +41,4 @@ ui <- fluidPage(
   )
 )
 
-# Server Section
-server <- function(input, output, session) {
-  
-}
-
-# Run the Application
-shinyApp(ui = ui, server = server)
 
