@@ -1,11 +1,3 @@
-library(shiny)
-library(shinythemes)
-library(plotly)
-library(quantmod)
-library(rugarch)
-library(caret)
-library(zoo)
-
 # Server Section
 server <- function(input, output, session) {
   # Fetch Stock Data
@@ -62,19 +54,18 @@ server <- function(input, output, session) {
     fit <- garchModel()
     forecast <- ugarchforecast(fit, n.ahead = 30)
     vol_forecast <- sigma(forecast)^2
-    plot_ly(x = 1:30, y = vol_forecast, type = "scatter", mode = "lines", name = "GARCH Forecast") %>%
-      layout(title = "GARCH Variance Forecast", xaxis = list(title = "Days Ahead"), yaxis = list(title = "Variance"))
+    
+    forecast_dates <- seq(from = Sys.Date() + 1, by = "day", length.out = 30)
+    
+    plot_ly(x = forecast_dates, y = vol_forecast, type = "scatter", mode = "lines", name = "GARCH Forecast") %>%
+      layout(title = "GARCH Forecast",
+             xaxis = list(title = "Date"),
+             yaxis = list(title = "Variance"),
+             showlegend = TRUE)
   })
   
-  # Rolling Volatility Plot
-  output$rollingVolatilityPlot <- renderPlotly({
-    req(stockData())
-    returns <- na.omit(diff(log(Cl(stockData()))))
-    rolling_volatility <- rollapply(returns, width = 30, FUN = sd, align = "right", fill = NA)
-    plot_ly(x = index(stockData())[31:length(returns)], y = rolling_volatility[31:length(returns)],
-            type = "scatter", mode = "lines", name = "Rolling Volatility") %>%
-      layout(title = "Rolling Volatility (30-Day)", xaxis = list(title = "Date"), yaxis = list(title = "Volatility"))
-  })
+  
+
   
   # Stock Price Forecast
   output$forecastPlot <- renderPlotly({
@@ -85,9 +76,11 @@ server <- function(input, output, session) {
     mu <- coef(fit)["mu"]
     last_close <- as.numeric(tail(Cl(stockData()), 1))
     forecast_prices <- last_close * exp(cumsum(rnorm(30, mean = mu, sd = vol_forecast)))
+    
     plot_ly(x = 1:30, y = forecast_prices, type = "scatter", mode = "lines", name = "Stock Price Forecast") %>%
       layout(title = "Stock Price Forecast (30 Days)", xaxis = list(title = "Days Ahead"), yaxis = list(title = "Price"))
   })
+  
   
   # RMSE vs K Plot
   output$rmsePlot <- renderPlotly({
@@ -106,14 +99,6 @@ server <- function(input, output, session) {
       layout(title = "RMSE vs K for K-NN", xaxis = list(title = "Number of Neighbors (K)"), yaxis = list(title = "RMSE"))
   })
   
-  # Volatility Overlay Plot
-  output$volatilityPlot <- renderPlotly({
-    req(stockData(), garchVariance())
-    dates <- index(stockData())
-    volatility <- garchVariance()
-    plot_ly(x = dates, y = volatility, type = "scatter", mode = "lines", name = "Predicted Volatility") %>%
-      layout(title = "Volatility Overlay Plot", xaxis = list(title = "Date"), yaxis = list(title = "Volatility"))
-  })
   
   # GARCH Variance
   garchVariance <- reactive({
@@ -129,7 +114,6 @@ server <- function(input, output, session) {
     quantile_95 <- -qnorm(0.05) * annualized_volatility
     quantile_95
   })
-  
   # Calculate Sharpe Ratio
   calculateSharpeRatio <- reactive({
     req(stockData())
