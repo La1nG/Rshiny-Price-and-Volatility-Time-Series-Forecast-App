@@ -30,14 +30,22 @@ ui <- fluidPage(
     
     mainPanel(
       tabsetPanel(
-        tabPanel("GARCH Forecast", plotlyOutput("garchForecastPlot")),
-        tabPanel("Rolling Volatility", plotlyOutput("rollingVolatilityPlot")),
-        tabPanel("Stock Price Forecast", plotlyOutput("forecastPlot")),
-        tabPanel("RMSE vs K", plotlyOutput("rmsePlot")),
-        tabPanel("Volatility Overlay", plotlyOutput("volatilityPlot"))
+        tabPanel("GARCH Forecast", 
+                 plotlyOutput("garchForecastPlot", height = "500px")),
+        tabPanel("Stock Price Forecast", 
+                 plotlyOutput("forecastPlot", height = "500px")),
+        tabPanel("RMSE vs K", 
+                 plotlyOutput("rmsePlot", height = "500px")),
       )
     )
   )
 )
 
+# Server Section
+server <- function(input, output, session) {
+  
+}
+
+# Run the Application
+shinyApp(ui = ui, server = server)
 
