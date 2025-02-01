@@ -13,8 +13,8 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 
 
-## GARCH
-GARCH (generalized autoregressive conditional heteroskedasticity) is a statistical regression model used in the application of the analysis and prediction of the volatility of financial systems, such as Bonds, Stocks, and other assets. GARCH incorporates historical variances and error terms to identify patterns in long term volatility. This app uses a HARCH (1,1) model specifying that the model will include the lag of one conditional variable (time varying volatility of the returns) and one lag of the squared error (signficance of deviation in returns which contribute to volatility).
+## sGARCH, eGARCH, gjrGARCH
+---
 
 
 ## K-NN 
