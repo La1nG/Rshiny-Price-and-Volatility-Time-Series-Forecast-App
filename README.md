@@ -5,9 +5,11 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 ## Features:
 - Price Forecasting
-- Volatility Dynamics Analysis and Forecasting 
-- Annualized Sharpe, Annualized VaR
-- Black Scholes Model and European Option Pricing, this can be changed by adjusting the pricing formula.
+- Volatility Dynamics Analysis and Forecasting for Portfolio Risk Management
+- Annualized Sharpe, VaR, and Expected Shortfall
+- Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH
+- Dynamic Conditional Correlation (DCC) Analysis with 2 Assets
+
 
 
 
@@ -34,4 +36,6 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 
 
 Working on: 
-- Value At Risk & Expected Shortfall 
+- Options Pricing
+- Historical Volatility Model
+- DCC with 2+ Assests
