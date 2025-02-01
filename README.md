@@ -25,7 +25,7 @@ K-NN (k-nearest neighbors) is a regression and classification model that predict
 Several libraries must be installed which can all be done with a single line in `R`:
 
 ```bash
-install.packages(c("shiny", "quantmod", "rugarch", "FNN", "plotly", "caret", "zoo"))
+install.packages(c("shiny", "quantmod", "rugarch", "FNN", "plotly", "caret", "zoo", "rmgarch", "PerformanceAnalytics"))
 ```
 
 # Set Up and Running the App
