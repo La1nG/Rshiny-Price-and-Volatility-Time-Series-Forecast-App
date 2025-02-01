@@ -3,27 +3,34 @@ library(shinythemes)
 library(plotly)
 library(quantmod)
 library(rugarch)
+library(rmgarch)  
+library(PerformanceAnalytics)
 library(caret)
 library(zoo)
+library(FNN)
 
 # UI Section
 ui <- fluidPage(
   theme = shinytheme("darkly"),
-  titlePanel("Financial Modeling Dashboard"),
+  titlePanel("Advanced Financial Risk Dashboard"),
   
   sidebarLayout(
     sidebarPanel(
-      textInput("ticker", "Stock Ticker (e.g., AAPL):", value = "AAPL"),
+      selectizeInput("ticker", "Asset(s):", 
+                     choices = c("AAPL", "GOOG", "", "VOO"),
+                     multiple = TRUE, selected = "AAPL"),
       dateRangeInput("daterange", "Date Range:", 
                      start = Sys.Date() - 365, end = Sys.Date()),
-      numericInput("alpha", "GARCH Alpha (α):", value = 0.1, step = 0.01),
-      numericInput("beta", "GARCH Beta (β):", value = 0.8, step = 0.01),
-      numericInput("k", "Max K:", value = 10, min = 1, step = 1),
+      selectInput("garch_model", "GARCH Model:",
+                  choices = c("sGARCH", "gjrGARCH", "eGARCH")),
+      numericInput("window", "Rolling Window (Days):", value = 252, min = 30),
+      numericInput("k", "Number of Neighbors (k):", value = 5, min = 1),
       actionButton("analyze", "Analyze"),
       br(),
-      h3("Outputs:"),
+      h3("Risk Measures:"),
       verbatimTextOutput("modelSummary"),
       textOutput("varResult"),
+      textOutput("esResult"),
       textOutput("sharpeRatioResult"),
       textOutput("optionPrice")
     ),
@@ -32,10 +39,14 @@ ui <- fluidPage(
       tabsetPanel(
         tabPanel("GARCH Forecast", 
                  plotlyOutput("garchForecastPlot", height = "500px")),
-        tabPanel("Stock Price Forecast", 
+        tabPanel("Price Forecast", 
                  plotlyOutput("forecastPlot", height = "500px")),
+        tabPanel("DCC Analysis", 
+                 plotlyOutput("dccPlot", height = "500px")),
+        tabPanel("Historical Risk", 
+                 plotlyOutput("historicalRiskPlot", height = "500px")),
         tabPanel("RMSE vs K", 
-                 plotlyOutput("rmsePlot", height = "500px")),
+                 plotlyOutput("rmsePlot", height = "500px"))
       )
     )
   )
