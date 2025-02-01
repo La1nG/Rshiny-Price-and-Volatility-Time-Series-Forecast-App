@@ -17,7 +17,7 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       selectizeInput("ticker", "Asset(s):", 
-                     choices = c("AAPL", "GOOG", "NVDA", "VOO"), # Input your choice tickers here
+                     choices = c("AAPL", "GOOG", "NVDA", "VOO"), # Input your choice tickers here for the model
                      multiple = TRUE, selected = "AAPL"),
       dateRangeInput("daterange", "Date Range:", 
                      start = Sys.Date() - 365, end = Sys.Date()),
