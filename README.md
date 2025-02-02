@@ -36,6 +36,5 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 
 
 Working on: 
-- Options Pricing
 - Historical Volatility Model
 - DCC with 2+ Assests
