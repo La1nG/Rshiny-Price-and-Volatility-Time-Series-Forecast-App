@@ -15,10 +15,16 @@ server <- function(input, output, session) {
     })
   })
   
+  # Compute and store the returns from the first asset
+  returnsData <- reactive({
+    req(stockData())
+    # Using the first asset’s closing prices
+    na.omit(diff(log(Cl(stockData()))[,1]))
+  })
+  
   # GARCH Model (Univariate)
   garchModel <- reactive({
-    req(stockData(), input$garch_model)
-    returns <- na.omit(diff(log(stockData()[,1])))  # First asset
+    req(returnsData(), input$garch_model)
     
     spec <- ugarchspec(
       variance.model = list(model = input$garch_model, garchOrder = c(1,1)),
@@ -27,7 +33,7 @@ server <- function(input, output, session) {
     )
     
     tryCatch({
-      ugarchfit(spec, data = returns)
+      ugarchfit(spec, data = returnsData())
     }, error = function(e) {
       showNotification("GARCH fit failed", type = "error")
       NULL
@@ -69,42 +75,52 @@ server <- function(input, output, session) {
     })
   })
   
-# Historical Risk debugging Measures
-rollRisk <- reactive({
-  req(garchModel(), input$window)
-  
-  # Check if data is available
-  data_length <- length(garchModel()@model$model$data)
-  if (data_length <= 0) {
-    showNotification("No data available for rolling risk calculation.", type = "error")
-    return(NULL)
-  }
-  
-  # Validate window size
-  if (input$window >= data_length) {
-    showNotification(paste("Window size too large for data length.", data_length - 1), type = "error")
-    return(NULL)
-  }
-  
-  tryCatch({
-    ugarchroll(
-      garchModel()@model$spec,
-      data = garchModel()@model$model$data,
-      window.size = input$window,
-      refit.every = 10
-    )
-  }, error = function(e) {
-    showNotification("Rolling risk calculation failed", type = "error")
-    NULL
+  # Historical Risk Measures using the stored returns data
+  rollRisk <- reactive({
+    req(garchModel(), returnsData(), input$window)
+    
+    # Use the returns computed in returnsData()
+    model_data <- returnsData()
+    
+    # Check if data is available
+    if (is.null(model_data) || length(model_data) <= 0) {
+      showNotification("No data available for rolling risk calculation.", type = "error")
+      return(NULL)
+    }
+    
+    # Get the data length
+    data_length <- length(model_data)
+    
+    # Validate window size: the in-sample window must be less than the total data points
+    if (input$window >= data_length) {
+      showNotification(paste("Window size too large for data length. Maximum allowed:", data_length - 1), type = "error")
+      return(NULL)
+    }
+    
+    # Calculate the out-of-sample forecast length
+    forecast_length <- data_length - input$window
+    
+    # Perform Historical risk calculation using the forecast length
+    tryCatch({
+      ugarchroll(
+        garchModel()@model$spec,
+        data = model_data,
+        forecast.length = forecast_length,  # use forecast.length instead of window.size
+        refit.every = 10,
+        refit.window = "moving"
+      )
+    }, error = function(e) {
+      showNotification(paste("Rolling risk calculation failed:", e$message), type = "error")
+      NULL
+    })
   })
-})
   
-  # GARCH Forecast
+  # Existing Outputs with Enhancements
   output$modelSummary <- renderPrint({
     if(!is.null(garchModel())) show(garchModel()) else "Model unavailable"
   })
   
-   output$garchForecastPlot <- renderPlotly({
+  output$garchForecastPlot <- renderPlotly({
     req(garchModel())
     fit <- garchModel()
     forecast <- ugarchforecast(fit, n.ahead = 30)
@@ -119,7 +135,7 @@ rollRisk <- reactive({
              showlegend = TRUE)
   })
   
-  # DCC Output
+  # New DCC Output
   output$dccPlot <- renderPlotly({
     req(dccModel())
     corr <- rcor(dccModel())[,,dim(rcor(dccModel()))[3]]
@@ -174,7 +190,7 @@ rollRisk <- reactive({
     annualised_sharpe_ratio
   })
   
-  # ES Calculation
+  # Enhanced ES Calculation
   calculateES <- reactive({
     req(garchModel())
     alpha <- 0.05
@@ -184,7 +200,7 @@ rollRisk <- reactive({
     mean(ES)
   })
   
-  # Outputs
+  # Updated Outputs
   output$varResult <- renderText({
     paste("1-Day 95% VaR:", round(calculateVaR(), 4))
   })
@@ -193,7 +209,7 @@ rollRisk <- reactive({
     paste("1-Day 95% ES:", round(calculateES(), 4))
   })
   
-# forecast
+  # Price Forecast Output
   output$forecastPlot <- renderPlotly({
     req(stockData(), garchModel())
     fit <- garchModel()
