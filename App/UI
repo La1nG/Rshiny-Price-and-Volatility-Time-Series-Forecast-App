@@ -3,7 +3,7 @@ library(shinythemes)
 library(plotly)
 library(quantmod)
 library(rugarch)
-library(rmgarch)  
+library(rmgarch)  # For DCC modeling
 library(PerformanceAnalytics)
 library(caret)
 library(zoo)
@@ -12,12 +12,12 @@ library(FNN)
 # UI Section
 ui <- fluidPage(
   theme = shinytheme("darkly"),
-  titlePanel("Advanced Financial Risk Dashboard"),
+  titlePanel("Financial Risk Dashboard"),
   
   sidebarLayout(
     sidebarPanel(
       selectizeInput("ticker", "Asset(s):", 
-                     choices = c("AAPL", "GOOG", "NVDA", "VOO"), # Input your choice tickers here for the model
+                     choices = c("AAPL", "GOOG", "NVDA", "VOO"),
                      multiple = TRUE, selected = "AAPL"),
       dateRangeInput("daterange", "Date Range:", 
                      start = Sys.Date() - 365, end = Sys.Date()),
@@ -32,7 +32,6 @@ ui <- fluidPage(
       textOutput("varResult"),
       textOutput("esResult"),
       textOutput("sharpeRatioResult"),
-      textOutput("optionPrice")
     ),
     
     mainPanel(
@@ -50,6 +49,7 @@ ui <- fluidPage(
       )
     )
   )
+)
 )
 
 
