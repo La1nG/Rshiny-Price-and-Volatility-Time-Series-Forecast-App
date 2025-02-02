@@ -36,5 +36,6 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 
 
 Working on: 
-- Historical Volatility Model
+- Debugging Historical Risk Model
 - DCC with 2+ Assests
+
