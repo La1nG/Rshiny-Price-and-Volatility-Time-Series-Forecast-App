@@ -1,3 +1,14 @@
+library(shiny)
+library(shinythemes)
+library(plotly)
+library(quantmod)
+library(rugarch)
+library(rmgarch)  # For DCC modeling
+library(PerformanceAnalytics)
+library(caret)
+library(zoo)
+library(FNN)
+
 # Server Section
 server <- function(input, output, session) {
   # Fetch Stock Data (Multivariate)
@@ -22,18 +33,21 @@ server <- function(input, output, session) {
     na.omit(diff(log(Cl(stockData()))[,1]))
   })
   
-  # GARCH Model (Univariate)
-  garchModel <- reactive({
-    req(returnsData(), input$garch_model)
-    
-    spec <- ugarchspec(
+  # Create a reactive GARCH specification
+  garchSpec <- reactive({
+    req(input$garch_model)
+    ugarchspec(
       variance.model = list(model = input$garch_model, garchOrder = c(1,1)),
       mean.model = list(armaOrder = c(0,0)),
       distribution.model = "std"
     )
-    
+  })
+  
+  # GARCH Model (Univariate) using the reactive specification
+  garchModel <- reactive({
+    req(returnsData(), garchSpec())
     tryCatch({
-      ugarchfit(spec, data = returnsData())
+      ugarchfit(garchSpec(), data = returnsData())
     }, error = function(e) {
       showNotification("GARCH fit failed", type = "error")
       NULL
@@ -75,9 +89,9 @@ server <- function(input, output, session) {
     })
   })
   
-  # Historical Risk Measures using the stored returns data
+  # Historical Risk Measures using the stored returns data and reactive spec
   rollRisk <- reactive({
-    req(garchModel(), returnsData(), input$window)
+    req(returnsData(), garchSpec(), input$window)
     
     # Use the returns computed in returnsData()
     model_data <- returnsData()
@@ -100,10 +114,10 @@ server <- function(input, output, session) {
     # Calculate the out-of-sample forecast length
     forecast_length <- data_length - input$window
     
-    # Perform Historical risk calculation using the forecast length
+    # Perform Historical risk calculation using the reactive spec
     tryCatch({
       ugarchroll(
-        garchModel()@model$spec,
+        spec = garchSpec(),
         data = model_data,
         forecast.length = forecast_length,  # use forecast.length instead of window.size
         refit.every = 10,
@@ -115,7 +129,7 @@ server <- function(input, output, session) {
     })
   })
   
-  # Existing Outputs with Enhancements
+  # Outputs
   output$modelSummary <- renderPrint({
     if(!is.null(garchModel())) show(garchModel()) else "Model unavailable"
   })
@@ -163,16 +177,16 @@ server <- function(input, output, session) {
     req(garchModel(), input$garch_model)
     alpha <- 0.05
     df <- coef(garchModel())["shape"]
-    sigma <- sigma(garchModel())
+    sigma_val <- sigma(garchModel())
     mu <- fitted(garchModel())
     
     if(input$garch_model == "gjrGARCH") {
       # Adjust for leverage effects
       gamma <- coef(garchModel())["gamma1"]
-      sigma <- sigma * (1 + gamma/2)
+      sigma_val <- sigma_val * (1 + gamma/2)
     }
     
-    VaR <- mu + sigma * qt(alpha, df = df)
+    VaR <- mu + sigma_val * qt(alpha, df = df)
     mean(VaR)
   })
   
@@ -190,7 +204,7 @@ server <- function(input, output, session) {
     annualised_sharpe_ratio
   })
   
-  # Enhanced ES Calculation
+  # ES Calculation
   calculateES <- reactive({
     req(garchModel())
     alpha <- 0.05
