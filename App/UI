@@ -12,12 +12,12 @@ library(FNN)
 # UI Section
 ui <- fluidPage(
   theme = shinytheme("darkly"),
-  titlePanel("Financial Risk Dashboard"),
+  titlePanel("Advanced Financial Risk Dashboard"),
   
   sidebarLayout(
     sidebarPanel(
       selectizeInput("ticker", "Asset(s):", 
-                     choices = c("AAPL", "GOOG", "NVDA", "VOO"),
+                     choices = c("NZDUSD=X", "USDNZD=X", "MSFT", "SPY"),
                      multiple = TRUE, selected = "AAPL"),
       dateRangeInput("daterange", "Date Range:", 
                      start = Sys.Date() - 365, end = Sys.Date()),
@@ -32,6 +32,7 @@ ui <- fluidPage(
       textOutput("varResult"),
       textOutput("esResult"),
       textOutput("sharpeRatioResult"),
+      textOutput("optionPrice")
     ),
     
     mainPanel(
@@ -50,6 +51,4 @@ ui <- fluidPage(
     )
   )
 )
-)
-
 
