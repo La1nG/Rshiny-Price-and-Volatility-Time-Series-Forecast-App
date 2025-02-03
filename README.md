@@ -36,6 +36,8 @@ After the libraries are installed into an R IDE such as RStudio you should then 
 
 
 Working on: 
-- Debugging Historical Risk Model
+- Debugging Historical risk Model
+  - `Failed to invert Hessian` - rugarch warning
+  - `warning in sqrt(): NaNs produced`
+  - `Warning in .gjrgarchfit(spec = spec, data = data, out.sample = out.sample,` 
 - DCC with 2+ Assests
-
