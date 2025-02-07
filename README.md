@@ -4,13 +4,13 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 
 ## Features:
-- Price Forecasting
-- Volatility Dynamics Analysis and Forecasting for Portfolio Risk Management
-- Annualized Sharpe, VaR, and Expected Shortfall (ES)
-- Historical Risk Analysis with VaR and ES
-- Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH
-- Dynamic Conditional Correlation (DCC) Analysis with 2 Assets
-
+- Annualized Sharpe, VaR, and Expected Shortfall (ES) Outputs.
+- Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH.
+- Historical Risk Analysis with VaR and ES.
+- Projected Risk Analysis with GARCH models.
+- Dynamic Conditional Correlation (DCC) Analysis with 2 Assets.
+- Asset Price Forecasting - Stock, Currency, Commodities, etc.
+  
 
 
 
@@ -45,3 +45,4 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 Working on: 
 - DCC with 2+ Assests
+  
