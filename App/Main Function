@@ -8,6 +8,7 @@ library(PerformanceAnalytics)
 library(caret)
 library(zoo)
 library(FNN)
+library(RPESE)
 
 # Server Section
 server <- function(input, output, session) {
@@ -29,27 +30,49 @@ server <- function(input, output, session) {
   # Compute and store the returns from the first asset
   returnsData <- reactive({
     req(stockData())
-    # Using the first asset’s closing prices
-    na.omit(diff(log(Cl(stockData()))[,1]))
+    
+    tryCatch({
+      prices <- Cl(stockData())[,1]
+      returns <- diff(log(prices))
+      returns <- na.omit(returns)
+      
+      if (any(is.infinite(returns)) || any(is.nan(returns))) {
+        showNotification("Invalid returns data detected", type = "error")
+        return(NULL)
+      }
+      
+      if (sd(returns, na.rm = TRUE) < 1e-6) {
+        showNotification("Asset shows no volatility (flat prices)", 
+                         type = "error")
+        return(NULL)
+      }
+      
+      returns
+    }, error = function(e) {
+      showNotification("Returns calculation failed", type = "error")
+      NULL
+    })
   })
   
-  # Create a reactive GARCH specification
+   # GARCH Model (Univariate) using the reactive specification
   garchSpec <- reactive({
     req(input$garch_model)
-    ugarchspec(
+    spec <- ugarchspec(
       variance.model = list(model = input$garch_model, garchOrder = c(1,1)),
       mean.model = list(armaOrder = c(0,0)),
       distribution.model = "std"
     )
+    spec
   })
   
-  # GARCH Model (Univariate) using the reactive specification
   garchModel <- reactive({
     req(returnsData(), garchSpec())
     tryCatch({
-      ugarchfit(garchSpec(), data = returnsData())
+      ugarchfit(spec = garchSpec(), data = returnsData(),
+                solver = "solnp", 
+                solver.control = list(trace = 0, maxit = 5000))
     }, error = function(e) {
-      showNotification("GARCH fit failed", type = "error")
+      showNotification(paste("GARCH fit failed:", e$message), type = "error")
       NULL
     })
   })
@@ -64,7 +87,7 @@ server <- function(input, output, session) {
     
     returns <- na.omit(apply(stockData(), 2, function(x) diff(log(x))))
     
-    # GARCH specification for each asset
+    # GARCH specification for each asset without solver parameters
     garch_spec <- lapply(1:ncol(returns), function(x) {
       tryCatch({
         ugarchspec(variance.model = list(model = input$garch_model, 
@@ -84,7 +107,7 @@ server <- function(input, output, session) {
     tryCatch({
       dccfit(dcc_spec, data = returns)
     }, error = function(e) {
-      showNotification("DCC fit failed", type = "error")
+      showNotification(paste("DCC fit failed:", e$message), type = "error")
       NULL
     })
   })
@@ -93,45 +116,42 @@ server <- function(input, output, session) {
   rollRisk <- reactive({
     req(returnsData(), garchSpec(), input$window)
     
-    # Use the returns computed in returnsData()
     model_data <- returnsData()
-    
-    # Check if data is available
-    if (is.null(model_data) || length(model_data) <= 0) {
-      showNotification("No data available for rolling risk calculation.", type = "error")
-      return(NULL)
-    }
-    
-    # Get the data length
     data_length <- length(model_data)
     
-    # Validate window size: the in-sample window must be less than the total data points
-    if (input$window >= data_length) {
-      showNotification(paste("Window size too large for data length. Maximum allowed:", data_length - 1), type = "error")
+    if (input$window < 30 || input$window >= data_length) {
+      showNotification(paste("Invalid window size. Must be between 30 and", data_length - 1), 
+                       type = "error")
       return(NULL)
     }
     
-    # Calculate the out-of-sample forecast length
-    forecast_length <- data_length - input$window
-    
-    # Perform Historical risk calculation using the reactive spec
     tryCatch({
       ugarchroll(
         spec = garchSpec(),
         data = model_data,
-        forecast.length = forecast_length,  # use forecast.length instead of window.size
-        refit.every = 10,
-        refit.window = "moving"
+        forecast.length = data_length - input$window,
+        refit.every = 5,
+        refit.window = "moving",
+        VaR.alpha = 0.05,
+        solver = "hybrid",
+        solver.control = list(
+          tol = 1e-6,       
+          delta = 1e-4,
+          maxit = 10000,    
+          inner.tol = 1e-4
+        ),
+        calculate.VaR = TRUE,
+        calculate.ES = TRUE
       )
     }, error = function(e) {
-      showNotification(paste("Rolling risk calculation failed:", e$message), type = "error")
+      showNotification(paste("Rolling forecast failed:", e$message), type = "error")
       NULL
     })
   })
   
-  # Outputs
+  # GARCH Forecast
   output$modelSummary <- renderPrint({
-    if(!is.null(garchModel())) show(garchModel()) else "Model unavailable"
+    if (!is.null(garchModel())) show(garchModel()) else "Model unavailable"
   })
   
   output$garchForecastPlot <- renderPlotly({
@@ -149,7 +169,7 @@ server <- function(input, output, session) {
              showlegend = TRUE)
   })
   
-  # New DCC Output
+  # DCC Output
   output$dccPlot <- renderPlotly({
     req(dccModel())
     corr <- rcor(dccModel())[,,dim(rcor(dccModel()))[3]]
@@ -161,17 +181,81 @@ server <- function(input, output, session) {
   # Historical Risk Output
   output$historicalRiskPlot <- renderPlotly({
     req(rollRisk())
-    df <- data.frame(
-      Date = index(rollRisk()@forecast$VaR),
-      VaR = rollRisk()@forecast$VaR[,1],
-      ES = rollRisk()@forecast$ES[,1]
-    )
-    plot_ly(df, x = ~Date) %>%
-      add_lines(y = ~VaR, name = "VaR") %>%
-      add_lines(y = ~ES, name = "ES") %>%
-      layout(title = "Historical Risk Measures")
+    forecast_obj <- rollRisk()
+    
+    tryCatch({
+      # Debugging: Print available elements
+      print("Forecast Object Structure:")
+      print(str(forecast_obj@forecast))
+      
+      # Check available column names
+      print("Available VaR columns:")
+      print(colnames(forecast_obj@forecast$VaR))
+      
+      # Extract VaR column dynamically
+      available_var_cols <- colnames(forecast_obj@forecast$VaR)
+      
+      if (length(available_var_cols) == 0) {
+        stop("VaR column not found in forecast object.")
+      }
+      
+      VaR_col_name <- available_var_cols[1]  # Use the first available column
+      
+      forecast_dates <- as.Date(rownames(forecast_obj@forecast$VaR))
+      realized_returns <- forecast_obj@forecast$VaR$realized
+      VaR_values <- forecast_obj@forecast$VaR[, VaR_col_name]
+      
+      valid_indices <- which(!is.na(VaR_values) & !is.na(realized_returns))
+      
+      if (length(valid_indices) < 2) {
+        showNotification("Not enough data points to display a line.", type = "warning")
+        return(plot_ly() %>% layout(title = "Insufficient Data"))
+      }
+      
+      df <- data.frame(
+        Date = forecast_dates[valid_indices],
+        VaR = as.numeric(VaR_values[valid_indices]),
+        Realized = as.numeric(realized_returns[valid_indices])
+      )
+      
+      # Compute Expected Shortfall (ES) manually
+      df$ES <- sapply(seq_along(df$Date), function(i) {
+        lower_returns <- df$Realized[df$Realized < df$VaR[i]]
+        if (length(lower_returns) > 0) {
+          return(mean(lower_returns))
+        } else {
+          return(NA)  # No ES if no values below VaR
+        }
+      })
+      
+      df <- df[complete.cases(df), ]  # Remove rows with NA values
+      
+      # Plotly
+      plot_ly(df, x = ~Date) %>%
+        add_trace(y = ~VaR, 
+                  type = "scatter", 
+                  mode = "lines+markers",
+                  name = "VaR",
+                  line = list(color = "red")) %>%
+        add_trace(y = ~ES, 
+                  type = "scatter", 
+                  mode = "lines+markers",
+                  name = "Expected Shortfall (ES)",
+                  line = list(color = "blue", dash = "dot")) %>%
+        layout(
+          title = "Historical VaR & Expected Shortfall",
+          xaxis = list(title = "Date"),
+          yaxis = list(title = "Risk Metrics"),
+          showlegend = TRUE
+        )
+      
+    }, error = function(e) {
+      showNotification(paste("Error:", e$message), type = "error")
+      return(plot_ly() %>% layout(title = "Error in Plotting"))
+    })
   })
-  
+
+
   # VaR Calculation
   calculateVaR <- reactive({
     req(garchModel(), input$garch_model)
@@ -180,7 +264,7 @@ server <- function(input, output, session) {
     sigma_val <- sigma(garchModel())
     mu <- fitted(garchModel())
     
-    if(input$garch_model == "gjrGARCH") {
+    if (input$garch_model == "gjrGARCH") {
       # Adjust for leverage effects
       gamma <- coef(garchModel())["gamma1"]
       sigma_val <- sigma_val * (1 + gamma/2)
@@ -214,7 +298,6 @@ server <- function(input, output, session) {
     mean(ES)
   })
   
-  # Updated Outputs
   output$varResult <- renderText({
     paste("1-Day 95% VaR:", round(calculateVaR(), 4))
   })
@@ -231,7 +314,10 @@ server <- function(input, output, session) {
     vol_forecast <- sigma(forecast)
     mu <- coef(fit)["mu"]
     last_close <- as.numeric(tail(stockData()[,1], 1))
-    forecast_prices <- last_close * exp(cumsum(rnorm(30, mean = mu, sd = vol_forecast)))
+    
+    # Use sapply to simulate returns with day-specific volatility
+    simulated_returns <- sapply(1:30, function(i) rnorm(1, mean = mu, sd = vol_forecast[i]))
+    forecast_prices <- last_close * exp(cumsum(simulated_returns))
     
     plot_ly(x = 1:30, y = forecast_prices, type = "scatter", mode = "lines") %>%
       layout(title = "Price Forecast", xaxis = list(title = "Days Ahead"))
