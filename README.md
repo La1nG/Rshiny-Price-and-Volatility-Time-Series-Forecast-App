@@ -6,7 +6,8 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 ## Features:
 - Price Forecasting
 - Volatility Dynamics Analysis and Forecasting for Portfolio Risk Management
-- Annualized Sharpe, VaR, and Expected Shortfall
+- Annualized Sharpe, VaR, and Expected Shortfall (ES)
+- Historical Risk Analysis with VaR and ES
 - Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH
 - Dynamic Conditional Correlation (DCC) Analysis with 2 Assets
 
@@ -36,8 +37,4 @@ NOTE: For now, to use the Historical risk section of the app, set the rolling wi
 
 
 Working on: 
-- Debugging Historical risk Model
-  - `Failed to invert Hessian` - rugarch warning
-  - `warning in sqrt(): NaNs produced`
-  - `Warning in .gjrgarchfit(spec = spec, data = data, out.sample = out.sample,` 
 - DCC with 2+ Assests
