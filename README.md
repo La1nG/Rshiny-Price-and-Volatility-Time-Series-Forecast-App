@@ -15,11 +15,20 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 
 ## sGARCH, eGARCH, gjrGARCH
----
+
+### sGARCH
+
+### eGARCH
+
+### gjrGARCG
+
+
+
+
 
 
 ## K-NN 
-K-NN (k-nearest neighbors) is a regression and classification model that predicts a target value by averaging the values of its nearest neighbours (data-points of an applied input). K-NN is a non-parametric and instance-based learning algorithm that can learn when a test-point is provided (through quantmod api), making it effective for continuous and non linear data predictions. In this app K-NN is used to forecast returns based on lagged returns and volatility (supported by GARCH) and how RMSE changes with different k values.
+K-NN (k-nearest neighbors) is a regression and classification model that predicts a target value by averaging the values of its nearest neighbours (data-points of an applied input). K-NN is a non-parametric and instance-based learning algorithm that can learn when a test-point is provided, making it effective for continuous and non linear data predictions. In this app K-NN is used to forecast returns based on lagged returns and volatility (supported by GARCH) and how RMSE changes with different k values.
 
 
 # Installation
