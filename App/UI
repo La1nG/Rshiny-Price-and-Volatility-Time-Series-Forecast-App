@@ -32,7 +32,6 @@ ui <- fluidPage(
       textOutput("varResult"),
       textOutput("esResult"),
       textOutput("sharpeRatioResult"),
-      textOutput("optionPrice")
     ),
     
     mainPanel(
