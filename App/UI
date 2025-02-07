@@ -12,15 +12,15 @@ library(FNN)
 # UI Section
 ui <- fluidPage(
   theme = shinytheme("darkly"),
-  titlePanel("Advanced Financial Risk Dashboard"),
+  titlePanel("Financial Risk Dashboard"),
   
   sidebarLayout(
     sidebarPanel(
       selectizeInput("ticker", "Asset(s):", 
                      choices = c("NZDUSD=X", "USDNZD=X", "MSFT", "SPY"),
-                     multiple = TRUE, selected = "AAPL"),
+                     multiple = TRUE, selected = "MSFT"),
       dateRangeInput("daterange", "Date Range:", 
-                     start = Sys.Date() - 365, end = Sys.Date()),
+                     start = Sys.Date() - 366, end = Sys.Date()),
       selectInput("garch_model", "GARCH Model:",
                   choices = c("sGARCH", "gjrGARCH", "eGARCH")),
       numericInput("window", "Rolling Window (Days):", value = 252, min = 30),
