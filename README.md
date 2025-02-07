@@ -31,9 +31,7 @@ install.packages(c("shiny", "shinythemes", "quantmod", "rugarch", "FNN", "plotly
 
 # Set Up and Running the App
 
-After the libraries are installed into an R IDE such as RStudio you should then set up a Rshiny web app file/folder then you can copy/paste the server logic into the server console and UI into UI console then run app.
-
-NOTE: For now, to use the Historical risk section of the app, set the rolling window to 60 days or below. The goal is to improve this to 247 days in the future.
+The only prerequisites needed to set-up and run the App are to install the above packages. Any important additional Notes for customisation or error decoding will be written alongside the function code in the app.  
 
 
 Working on: 
