@@ -44,5 +44,6 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 
 Working on: 
+- Improving Stock Price Forecast
 - DCC with 2+ Assests
   
