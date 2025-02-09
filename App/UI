@@ -3,11 +3,17 @@ library(shinythemes)
 library(plotly)
 library(quantmod)
 library(rugarch)
-library(rmgarch)  # For DCC modeling
+library(rmgarch)      
 library(PerformanceAnalytics)
 library(caret)
 library(zoo)
 library(FNN)
+library(RPESE)
+library(TTR)          
+
+library(forecast)     # For ARIMA modeling
+library(MSGARCH)      # For regime-switching GARCH modeling
+library(torch)        # For LSTM networks with torch
 
 # UI Section
 ui <- fluidPage(
@@ -16,9 +22,17 @@ ui <- fluidPage(
   
   sidebarLayout(
     sidebarPanel(
-      selectizeInput("ticker", "Asset(s):", 
-                     choices = c("NZDUSD=X", "USDNZD=X", "MSFT", "SPY"),
-                     multiple = TRUE, selected = "MSFT"),
+      selectizeInput(
+        inputId = "ticker",
+        label = "Asset(s):",
+        choices = usTickerSymbols,  
+        multiple = TRUE, 
+        selected = "MSFT",
+        options = list(
+          create = TRUE,                        # Allow you to type new tickers that arent in list
+          placeholder = "Type ticker symbol(s) here..."
+        )
+      ),
       dateRangeInput("daterange", "Date Range:", 
                      start = Sys.Date() - 366, end = Sys.Date()),
       selectInput("garch_model", "GARCH Model:",
@@ -32,6 +46,7 @@ ui <- fluidPage(
       textOutput("varResult"),
       textOutput("esResult"),
       textOutput("sharpeRatioResult"),
+      textOutput("optionPrice")
     ),
     
     mainPanel(
@@ -50,4 +65,5 @@ ui <- fluidPage(
     )
   )
 )
+
 
