@@ -3,36 +3,106 @@ library(shinythemes)
 library(plotly)
 library(quantmod)
 library(rugarch)
-library(rmgarch)  # For DCC modeling
+library(rmgarch)      
 library(PerformanceAnalytics)
 library(caret)
 library(zoo)
 library(FNN)
+library(RPESE)
+library(TTR)          
 
+library(forecast)     # For ARIMA modeling
+library(MSGARCH)      # For regime-switching GARCH modeling
+library(torch)        # For LSTM networks with torch
+
+# Pre-fetch ticker symbols from quantmod's stockSymbols() at startup.
+allTickers <- tryCatch({
+  stockSymbols()
+}, error = function(e) {
+  # Fallback: a default set of tickers if the fetch fails.
+  data.frame(Symbol = c("MSFT", "SPY", "AAPL", "GOOG"))
+})
+usTickerSymbols <- sort(unique(allTickers$Symbol))
+
+# UI Section
+ui <- fluidPage(
+  theme = shinytheme("darkly"),
+  titlePanel("Financial Risk Dashboard"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      selectizeInput(
+        inputId = "ticker",
+        label = "Asset(s):",
+        choices = usTickerSymbols,  
+        multiple = TRUE, 
+        selected = "MSFT",
+        options = list(
+          create = TRUE,                        # Allow you to type new tickers that arent in list
+          placeholder = "Type ticker symbol(s) here..."
+        )
+      ),
+      dateRangeInput("daterange", "Date Range:", 
+                     start = Sys.Date() - 366, end = Sys.Date()),
+      selectInput("garch_model", "GARCH Model:",
+                  choices = c("sGARCH", "gjrGARCH", "eGARCH")),
+      numericInput("window", "Rolling Window (Days):", value = 252, min = 30),
+      numericInput("k", "Number of Neighbors (k):", value = 5, min = 1),
+      actionButton("analyze", "Analyze"),
+      br(),
+      h3("Risk Measures:"),
+      verbatimTextOutput("modelSummary"),
+      textOutput("varResult"),
+      textOutput("esResult"),
+      textOutput("sharpeRatioResult"),
+      textOutput("optionPrice")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("GARCH Forecast", 
+                 plotlyOutput("garchForecastPlot", height = "500px")),
+        tabPanel("Price Forecast", 
+                 plotlyOutput("forecastPlot", height = "500px")),
+        tabPanel("DCC Analysis", 
+                 plotlyOutput("dccPlot", height = "500px")),
+        tabPanel("Historical Risk", 
+                 plotlyOutput("historicalRiskPlot", height = "500px")),
+        tabPanel("RMSE vs K", 
+                 plotlyOutput("rmsePlot", height = "500px"))
+      )
+    )
+  )
+)
 
 # Server Section
 server <- function(input, output, session) {
+  
+  ### Data Fetching & Returns Calculation ###
+  
   # Fetch Stock Data (Multivariate)
   stockData <- eventReactive(input$analyze, {
     req(input$ticker, input$daterange)
     tryCatch({
-      getSymbols(input$ticker, src = "yahoo",
-                 from = input$daterange[1],
-                 to = input$daterange[2],
-                 auto.assign = TRUE)
-      na.omit(do.call(merge, lapply(input$ticker, function(x) Cl(get(x)))))
+      lapply(input$ticker, function(sym) {
+        getSymbols(sym, src = "yahoo",
+                   from = input$daterange[1],
+                   to = input$daterange[2],
+                   auto.assign = FALSE)
+      }) %>% 
+        do.call(merge, .) %>% 
+        na.omit()
     }, error = function(e) {
-      showNotification("Data fetch failed. Check inputs.", type = "error")
+      showNotification("Data fetch failed. Please check the ticker symbol(s).", type = "error")
       NULL
     })
   })
   
-  # Compute and store the returns from the first asset
+  # Compute Returns from the first asset
   returnsData <- reactive({
     req(stockData())
-    
     tryCatch({
-      prices <- Cl(stockData())[,1]
+      prices <- Cl(stockData())[, 1]
       returns <- diff(log(prices))
       returns <- na.omit(returns)
       
@@ -40,13 +110,10 @@ server <- function(input, output, session) {
         showNotification("Invalid returns data detected", type = "error")
         return(NULL)
       }
-      
       if (sd(returns, na.rm = TRUE) < 1e-6) {
-        showNotification("Asset shows no volatility (flat prices)", 
-                         type = "error")
+        showNotification("Asset shows no volatility (flat prices)", type = "error")
         return(NULL)
       }
-      
       returns
     }, error = function(e) {
       showNotification("Returns calculation failed", type = "error")
@@ -54,17 +121,19 @@ server <- function(input, output, session) {
     })
   })
   
-   # GARCH Model (Univariate) using the reactive specification
+  ### GARCH & DCC Models ###
+  
+  # Reactive GARCH specification (for legacy use in risk plots)
   garchSpec <- reactive({
     req(input$garch_model)
-    spec <- ugarchspec(
-      variance.model = list(model = input$garch_model, garchOrder = c(1,1)),
-      mean.model = list(armaOrder = c(0,0)),
+    ugarchspec(
+      variance.model = list(model = input$garch_model, garchOrder = c(1, 1)),
+      mean.model = list(armaOrder = c(0, 0)),
       distribution.model = "std"
     )
-    spec
   })
   
+  # GARCH Model (Univariate) – used for risk metrics
   garchModel <- reactive({
     req(returnsData(), garchSpec())
     tryCatch({
@@ -86,23 +155,18 @@ server <- function(input, output, session) {
     }
     
     returns <- na.omit(apply(stockData(), 2, function(x) diff(log(x))))
-    
-    # GARCH specification for each asset without solver parameters
     garch_spec <- lapply(1:ncol(returns), function(x) {
       tryCatch({
-        ugarchspec(variance.model = list(model = input$garch_model, 
-                                         garchOrder = c(1,1)),
+        ugarchspec(variance.model = list(model = input$garch_model, garchOrder = c(1, 1)),
                    distribution.model = "std")
       }, error = function(e) {
         showNotification(paste("GARCH spec failed for asset", x), type = "error")
         NULL
       })
     })
-    
     if (any(sapply(garch_spec, is.null))) {
       return(NULL)
     }
-    
     dcc_spec <- dccspec(multispec(garch_spec), VAR = FALSE, model = "DCC")
     tryCatch({
       dccfit(dcc_spec, data = returns)
@@ -112,19 +176,17 @@ server <- function(input, output, session) {
     })
   })
   
-  # Historical Risk Measures using the stored returns data and reactive spec
+  ### Historical Risk & Rolling Forecast ###
+  
   rollRisk <- reactive({
     req(returnsData(), garchSpec(), input$window)
-    
     model_data <- returnsData()
     data_length <- length(model_data)
-    
     if (input$window < 30 || input$window >= data_length) {
       showNotification(paste("Invalid window size. Must be between 30 and", data_length - 1), 
                        type = "error")
       return(NULL)
     }
-    
     tryCatch({
       ugarchroll(
         spec = garchSpec(),
@@ -135,9 +197,9 @@ server <- function(input, output, session) {
         VaR.alpha = 0.05,
         solver = "hybrid",
         solver.control = list(
-          tol = 1e-6,       
+          tol = 1e-6,
           delta = 1e-4,
-          maxit = 10000,    
+          maxit = 10000,
           inner.tol = 1e-4
         ),
         calculate.VaR = TRUE,
@@ -149,7 +211,228 @@ server <- function(input, output, session) {
     })
   })
   
-  # GARCH Forecast
+  ### Additional Data for Price Forecasting ###
+  
+  enrichedData <- reactive({
+    req(stockData(), returnsData())
+    prices <- Cl(stockData())[, 1]
+    returns <- as.numeric(returnsData())
+    # Calculate technical indicators
+    ma20 <- SMA(prices, n = 20)
+    rsi14 <- RSI(prices, n = 14)
+    valid_index <- which(!is.na(ma20) & !is.na(rsi14))
+    df <- data.frame(
+      Returns = returns[valid_index],
+      MA20 = as.numeric(ma20[valid_index]),
+      RSI14 = as.numeric(rsi14[valid_index])
+    )
+    # Add previous day's return as a feature
+    df$Lag1 <- c(NA, head(df$Returns, -1))
+    df <- na.omit(df)
+    df
+  })
+  
+  ### LSTM Component for Nonlinear Forecasting using torch ###
+  
+  # Train an LSTM model on data using torch.
+  # sliding window (here window_size = 10) over selected features.
+  lstmModel <- reactive({
+    req(enrichedData())
+    data <- enrichedData()
+    window_size <- 10
+    num_samples <- nrow(data)
+    if(num_samples <= window_size) {
+      showNotification("Not enough data for LSTM training", type = "error")
+      return(NULL)
+    }
+    
+    # Build input sequences and targets
+    X <- array(0, dim = c(num_samples - window_size, window_size, 3))
+    y <- numeric(num_samples - window_size)
+    for(i in 1:(num_samples - window_size)) {
+      X[i,,] <- as.matrix(data[i:(i+window_size-1), c("MA20", "RSI14", "Lag1")])
+      y[i] <- data$Returns[i+window_size]
+    }
+    
+    # Split into training (80%) and validation sets
+    train_size <- floor(0.8 * dim(X)[1])
+    X_train <- X[1:train_size,,]
+    y_train <- y[1:train_size]
+    X_val <- X[(train_size+1):dim(X)[1],,]
+    y_val <- y[(train_size+1):dim(X)[1]]
+    
+    # Convert arrays to torch tensors
+    X_train <- torch_tensor(X_train, dtype = torch_float())
+    y_train <- torch_tensor(y_train, dtype = torch_float())$unsqueeze(2)
+    X_val <- torch_tensor(X_val, dtype = torch_float())
+    y_val <- torch_tensor(y_val, dtype = torch_float())$unsqueeze(2)
+    X_full <- torch_tensor(X, dtype = torch_float())
+    
+    # Define the LSTM model using torch
+    lstm_net <- nn_module(
+      "LSTMModel",
+      initialize = function(input_size, hidden_size, num_layers, dropout) {
+        self$lstm <- nn_lstm(
+          input_size = input_size,
+          hidden_size = hidden_size,
+          num_layers = num_layers,
+          batch_first = TRUE,
+          dropout = dropout
+        )
+        self$fc <- nn_linear(hidden_size, 1)
+      },
+      forward = function(x) {
+        # x: (batch, seq_length, input_size)
+        out <- self$lstm(x)
+        # out[[1]]: outputs for all timesteps; extract the last time step
+        last_output <- out[[1]][ , dim(x)[2], ]
+        self$fc(last_output)
+      }
+    )
+    
+    # Instantiate the model
+    input_size <- 3
+    hidden_size <- 50
+    num_layers <- 1
+    dropout <- 0.2
+    net <- lstm_net(input_size, hidden_size, num_layers, dropout)
+    
+    # Define optimizer and loss function
+    optimizer <- optim_adam(net$parameters, lr = 0.001)
+    loss_fn <- nn_mse_loss()
+    
+    # Training loop parameters
+    epochs <- 100
+    batch_size <- 16
+    best_val_loss <- Inf
+    patience <- 10
+    no_improve_epochs <- 0
+    
+    n_train <- X_train$size(1)
+    
+    for(epoch in 1:epochs) {
+      net$train()
+      permutation <- sample(n_train)
+      total_loss <- 0
+      
+      for(i in seq(1, n_train, by = batch_size)) {
+        indices <- permutation[i:min(i+batch_size-1, n_train)]
+        batch_X <- X_train[indices,,, drop = FALSE]
+        batch_y <- y_train[indices,,, drop = FALSE]
+        
+        optimizer$zero_grad()
+        output <- net(batch_X)
+        loss <- loss_fn(output, batch_y)
+        loss$backward()
+        optimizer$step()
+        total_loss <- total_loss + loss$item() * length(indices)
+      }
+      
+      avg_train_loss <- total_loss / n_train
+      
+      # Evaluate on validation set
+      net$eval()
+      with_no_grad({
+        val_output <- net(X_val)
+        val_loss <- loss_fn(val_output, y_val)$item()
+      })
+      
+      # Early stopping
+      if(val_loss < best_val_loss) {
+        best_val_loss <- val_loss
+        no_improve_epochs <- 0
+      } else {
+        no_improve_epochs <- no_improve_epochs + 1
+      }
+      
+      if(no_improve_epochs >= patience) {
+        cat("Early stopping at epoch", epoch, "\n")
+        break
+      }
+      
+      cat(sprintf("Epoch %d: Train Loss = %.4f, Val Loss = %.4f\n", epoch, avg_train_loss, val_loss))
+    }
+    
+    # Return the trained model, the window size, and the full input sequences (as a torch tensor)
+    list(model = net, window_size = window_size, X_full = X_full)
+  })
+  
+  # Forecast the next return using the torch LSTM model.
+  lstmForecast <- reactive({
+    req(lstmModel())
+    mod_info <- lstmModel()
+    net <- mod_info$model
+    window_size <- mod_info$window_size
+    X_full <- mod_info$X_full
+    # Use the last available sequence from the training data.
+    last_seq <- X_full[dim(X_full)[1], , , drop = FALSE]
+    last_seq <- last_seq$unsqueeze(1)  # add batch dimension
+    net$eval()
+    with_no_grad({
+      pred <- net(last_seq)
+    })
+    as.numeric(pred$item())
+  })
+  
+  ### Hybrid Price Forecast: ARIMA+MSGARCH & LSTM  ###
+  
+  priceForecast <- reactive({
+    req(stockData(), returnsData(), enrichedData(), lstmForecast())
+    
+    cat("Starting ARIMA+MSGARCH forecasting...\n")
+    
+    # ---- Linear - Regime Component: ARIMA + MSGARCH ----
+    arima_fit <- auto.arima(returnsData())
+    cat("ARIMA model fitted\n")
+    arima_forecast <- forecast(arima_fit, h = 30)$mean  # 30-day return forecast
+    resids <- residuals(arima_fit)
+    cat("Residuals computed, length =", length(resids), "\n")
+    
+    msgarch_spec <- CreateSpec(
+      variance.spec = list(model = input$garch_model, garchOrder = c(1,1)),
+      distribution.spec = list(distribution = "std"),
+      switch.spec = list(K = 2)
+    )
+    msgarch_fit <- FitML(spec = msgarch_spec, data = resids)
+    cat("MSGARCH model fitted\n")
+    
+    # unexported Forecast function from MSGARCH
+    msgarch_forecast <- MSGARCH:::Forecast(msgarch_fit, h = 30)
+    cat("MSGARCH forecasting complete\n")
+    
+    vol_forecast <- sqrt(msgarch_forecast$variance)
+    cat("Initial vol_forecast length:", length(vol_forecast), "\n")
+    
+    if (length(vol_forecast) < 30) {
+      warning("MSGARCH forecast variance output has fewer than 30 elements. Replicating the last value to fill the gap.")
+      vol_forecast <- c(vol_forecast, rep(vol_forecast[length(vol_forecast)], 30 - length(vol_forecast)))
+    }
+    cat("Final vol_forecast length:", length(vol_forecast), "\n")
+    
+    # ---- Nonlinear Component: LSTM Forecast ----
+    lstm_pred <- lstmForecast()  # single-step torch LSTM forecast for return
+    cat("LSTM forecast obtained:", lstm_pred, "\n")
+    lstm_forecast <- rep(lstm_pred, 30)
+    
+    # ---- Ensemble Integration ----
+    combined_mu <- 0.6 * as.numeric(arima_forecast) + 0.4 * as.numeric(lstm_forecast)
+    cat("Ensemble drift computed\n")
+    
+    last_close <- as.numeric(tail(Cl(stockData())[, 1], 1))
+    cat("Last closing price:", last_close, "\n")
+    
+    set.seed(42)
+    simulated_returns <- sapply(1:30, function(i) {
+      rnorm(1, mean = combined_mu[i], sd = vol_forecast[i])
+    })
+    forecast_prices <- last_close * exp(cumsum(simulated_returns))
+    cat("Price forecast computed\n")
+    
+    list(prices = forecast_prices, days = 1:30)
+  })
+  
+  ### Outputs ###
+  
   output$modelSummary <- renderPrint({
     if (!is.null(garchModel())) show(garchModel()) else "Model unavailable"
   })
@@ -157,9 +440,8 @@ server <- function(input, output, session) {
   output$garchForecastPlot <- renderPlotly({
     req(garchModel())
     fit <- garchModel()
-    forecast <- ugarchforecast(fit, n.ahead = 30)
-    vol_forecast <- sigma(forecast)^2
-    
+    forecast_obj <- ugarchforecast(fit, n.ahead = 30)
+    vol_forecast <- sigma(forecast_obj)^2
     forecast_dates <- seq(from = Sys.Date() + 1, by = "day", length.out = 30)
     
     plot_ly(x = forecast_dates, y = vol_forecast, type = "scatter", mode = "lines", name = "GARCH Forecast") %>%
@@ -169,7 +451,6 @@ server <- function(input, output, session) {
              showlegend = TRUE)
   })
   
-  # DCC Output
   output$dccPlot <- renderPlotly({
     req(dccModel())
     corr <- rcor(dccModel())[,,dim(rcor(dccModel()))[3]]
@@ -178,35 +459,19 @@ server <- function(input, output, session) {
       layout(title = "Dynamic Conditional Correlations")
   })
   
-  # Historical Risk Output
   output$historicalRiskPlot <- renderPlotly({
     req(rollRisk())
     forecast_obj <- rollRisk()
-    
     tryCatch({
-      # Debugging: Print available elements
-      print("Forecast Object Structure:")
-      print(str(forecast_obj@forecast))
-      
-      # Check available column names
-      print("Available VaR columns:")
-      print(colnames(forecast_obj@forecast$VaR))
-      
-      # Extract VaR column dynamically
       available_var_cols <- colnames(forecast_obj@forecast$VaR)
+      if (length(available_var_cols) == 0) stop("VaR column not found in forecast object.")
       
-      if (length(available_var_cols) == 0) {
-        stop("VaR column not found in forecast object.")
-      }
-      
-      VaR_col_name <- available_var_cols[1]  # Use the first available column
-      
+      VaR_col_name <- available_var_cols[1]
       forecast_dates <- as.Date(rownames(forecast_obj@forecast$VaR))
       realized_returns <- forecast_obj@forecast$VaR$realized
       VaR_values <- forecast_obj@forecast$VaR[, VaR_col_name]
       
       valid_indices <- which(!is.na(VaR_values) & !is.na(realized_returns))
-      
       if (length(valid_indices) < 2) {
         showNotification("Not enough data points to display a line.", type = "warning")
         return(plot_ly() %>% layout(title = "Insufficient Data"))
@@ -218,44 +483,27 @@ server <- function(input, output, session) {
         Realized = as.numeric(realized_returns[valid_indices])
       )
       
-      # Compute Expected Shortfall (ES) manually
       df$ES <- sapply(seq_along(df$Date), function(i) {
         lower_returns <- df$Realized[df$Realized < df$VaR[i]]
-        if (length(lower_returns) > 0) {
-          return(mean(lower_returns))
-        } else {
-          return(NA)  # No ES if no values below VaR
-        }
+        if (length(lower_returns) > 0) return(mean(lower_returns)) else return(NA)
       })
+      df <- df[complete.cases(df), ]
       
-      df <- df[complete.cases(df), ]  # Remove rows with NA values
-      
-      # Plotly
       plot_ly(df, x = ~Date) %>%
-        add_trace(y = ~VaR, 
-                  type = "scatter", 
-                  mode = "lines+markers",
-                  name = "VaR",
-                  line = list(color = "red")) %>%
-        add_trace(y = ~ES, 
-                  type = "scatter", 
-                  mode = "lines+markers",
-                  name = "Expected Shortfall (ES)",
-                  line = list(color = "blue", dash = "dot")) %>%
-        layout(
-          title = "Historical VaR & Expected Shortfall",
-          xaxis = list(title = "Date"),
-          yaxis = list(title = "Risk Metrics"),
-          showlegend = TRUE
-        )
-      
+        add_trace(y = ~VaR, type = "scatter", mode = "lines+markers",
+                  name = "VaR", line = list(color = "red")) %>%
+        add_trace(y = ~ES, type = "scatter", mode = "lines+markers",
+                  name = "Expected Shortfall (ES)", line = list(color = "blue", dash = "dot")) %>%
+        layout(title = "Historical VaR & Expected Shortfall",
+               xaxis = list(title = "Date"),
+               yaxis = list(title = "Risk Metrics"),
+               showlegend = TRUE)
     }, error = function(e) {
       showNotification(paste("Error:", e$message), type = "error")
       return(plot_ly() %>% layout(title = "Error in Plotting"))
     })
   })
-
-
+  
   # VaR Calculation
   calculateVaR <- reactive({
     req(garchModel(), input$garch_model)
@@ -265,7 +513,6 @@ server <- function(input, output, session) {
     mu <- fitted(garchModel())
     
     if (input$garch_model == "gjrGARCH") {
-      # Adjust for leverage effects
       gamma <- coef(garchModel())["gamma1"]
       sigma_val <- sigma_val * (1 + gamma/2)
     }
@@ -274,21 +521,18 @@ server <- function(input, output, session) {
     mean(VaR)
   })
   
-  # Calculate Sharpe Ratio
+  # Sharpe Ratio Calculation
   calculateSharpeRatio <- reactive({
     req(stockData())
     returns <- na.omit(diff(log(Cl(stockData()))))
     risk_free_rate <- 0.02
     daily_risk_free <- risk_free_rate / 252
     excess_returns <- returns - daily_risk_free
-    mean_excess <- mean(excess_returns)
-    volatility <- sd(excess_returns)
-    sharpe_ratio <- mean_excess / volatility
-    annualised_sharpe_ratio <- sharpe_ratio * sqrt(252)
-    annualised_sharpe_ratio
+    sharpe_ratio <- mean(excess_returns) / sd(excess_returns)
+    sharpe_ratio * sqrt(252)
   })
   
-  # ES Calculation
+  # Enhanced ES Calculation
   calculateES <- reactive({
     req(garchModel())
     alpha <- 0.05
@@ -306,24 +550,22 @@ server <- function(input, output, session) {
     paste("1-Day 95% ES:", round(calculateES(), 4))
   })
   
-  # Price Forecast Output
-  output$forecastPlot <- renderPlotly({
-    req(stockData(), garchModel())
-    fit <- garchModel()
-    forecast <- ugarchforecast(fit, n.ahead = 30)
-    vol_forecast <- sigma(forecast)
-    mu <- coef(fit)["mu"]
-    last_close <- as.numeric(tail(stockData()[,1], 1))
-    
-    # Use sapply to simulate returns with day-specific volatility
-    simulated_returns <- sapply(1:30, function(i) rnorm(1, mean = mu, sd = vol_forecast[i]))
-    forecast_prices <- last_close * exp(cumsum(simulated_returns))
-    
-    plot_ly(x = 1:30, y = forecast_prices, type = "scatter", mode = "lines") %>%
-      layout(title = "Price Forecast", xaxis = list(title = "Days Ahead"))
+  output$sharpeRatioResult <- renderText({
+    paste("Sharpe Ratio:", round(calculateSharpeRatio(), 2))
   })
   
-  # RMSE vs K Plot
+  ### Hybrid Price Forecast Output ###
+  
+  output$forecastPlot <- renderPlotly({
+    req(priceForecast())
+    forecast <- priceForecast()
+    plot_ly(x = forecast$days, y = forecast$prices, type = "scatter", mode = "lines") %>%
+      layout(title = "Price Forecast (Hybrid ARIMA+MSGARCH & torch LSTM Ensemble)",
+             xaxis = list(title = "Days Ahead"),
+             yaxis = list(title = "Forecasted Price"))
+  })
+  
+  # RMSE vs K Plot using KNN Regression
   output$rmsePlot <- renderPlotly({
     req(stockData())
     returns <- na.omit(diff(log(Cl(stockData()))))
@@ -336,13 +578,11 @@ server <- function(input, output, session) {
       model <- knn.reg(train = train, test = test, y = train, k = k)
       sqrt(mean((model$pred - test)^2))
     })
+    
     plot_ly(x = 1:input$k, y = rmse_values, type = "scatter", mode = "lines", name = "RMSE vs K") %>%
-      layout(title = "RMSE vs K for K-NN", xaxis = list(title = "Number of Neighbors (K)"), yaxis = list(title = "RMSE"))
-  })
-  
-  output$sharpeRatioResult <- renderText({
-    req(calculateSharpeRatio())
-    paste("Sharpe Ratio:", round(calculateSharpeRatio(), 2))
+      layout(title = "RMSE vs K for K-NN", 
+             xaxis = list(title = "Number of Neighbors (K)"), 
+             yaxis = list(title = "RMSE"))
   })
 }
 
