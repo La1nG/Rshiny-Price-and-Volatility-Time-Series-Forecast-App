@@ -1,20 +1,23 @@
 # Time Series Forecasting
-Time series forecasting is a quantitative meathod of analysing data over periods of time with the purpose of predict future trends and patterns.  This R App aims to make an easily manageable tool that can assist in risk management while providing adaptable, realistic and informative insights and analysis for major financial assets such as Stocks, Currencies, and Bonds by accounting for volatility dynamics, asymmetry, and variance. 
+Time series forecasting is a quantitative meathod of analysing data over periods of time with the purpose of predict future trends and patterns.  This R App aims to make an easily manageable tool that can assist in risk management and investment decisions while providing adaptable, realistic and informative insights and analysis for major financial assets such as Stocks, Currencies, and Bonds by accounting for volatility dynamics, asymmetry, and variance. 
 
 
 
 ## Features:
-- Annualized Sharpe, VaR, and Expected Shortfall (ES) Outputs.
+- Machine Learning and Neural Network Price Forecasting using LSTM, ARIMA, and MSGARCH.
+- Dynamic Conditional Correlation (DCC) Analysis with 2 Assets.
 - Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH.
 - Historical Risk Analysis with VaR and ES.
 - Projected Risk Analysis with GARCH models.
-- Dynamic Conditional Correlation (DCC) Analysis with 2 Assets.
-- Asset Price Forecasting - Stock, Currency, Commodities, etc.
-  
+- Annualized Sharpe, VaR, and Expected Shortfall (ES) Outputs at 95% confidence Interval.
 
 
 
-## sGARCH, eGARCH, gjrGARCH
+
+
+
+
+## sGARCH, eGARCH, gjrGARCH, MSGARCH
 
 ### sGARCH
 
@@ -22,7 +25,7 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 ### gjrGARCG
 
-
+### MSGARCH
 
 
 
@@ -44,6 +47,6 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 
 Working on: 
-- Improving Stock Price Forecast
+- Debugging Stock Price Forecast- Fatal Error from MSGARCH package
 - DCC with 2+ Assests
   
