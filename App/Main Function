@@ -11,9 +11,10 @@ library(FNN)
 library(RPESE)
 library(TTR)          
 
-library(forecast)     # For ARIMA modeling
-library(MSGARCH)      # For regime-switching GARCH modeling
-library(torch)        # For LSTM networks with torch
+library(forecast)     
+library(MSGARCH)      
+library(torch)       
+
 
 # Pre-fetch ticker symbols from quantmod's stockSymbols() at startup.
 allTickers <- tryCatch({
@@ -24,56 +25,7 @@ allTickers <- tryCatch({
 })
 usTickerSymbols <- sort(unique(allTickers$Symbol))
 
-# UI Section
-ui <- fluidPage(
-  theme = shinytheme("darkly"),
-  titlePanel("Financial Risk Dashboard"),
-  
-  sidebarLayout(
-    sidebarPanel(
-      selectizeInput(
-        inputId = "ticker",
-        label = "Asset(s):",
-        choices = usTickerSymbols,  
-        multiple = TRUE, 
-        selected = "MSFT",
-        options = list(
-          create = TRUE,                        # Allow you to type new tickers that arent in list
-          placeholder = "Type ticker symbol(s) here..."
-        )
-      ),
-      dateRangeInput("daterange", "Date Range:", 
-                     start = Sys.Date() - 366, end = Sys.Date()),
-      selectInput("garch_model", "GARCH Model:",
-                  choices = c("sGARCH", "gjrGARCH", "eGARCH")),
-      numericInput("window", "Rolling Window (Days):", value = 252, min = 30),
-      numericInput("k", "Number of Neighbors (k):", value = 5, min = 1),
-      actionButton("analyze", "Analyze"),
-      br(),
-      h3("Risk Measures:"),
-      verbatimTextOutput("modelSummary"),
-      textOutput("varResult"),
-      textOutput("esResult"),
-      textOutput("sharpeRatioResult"),
-      textOutput("optionPrice")
-    ),
-    
-    mainPanel(
-      tabsetPanel(
-        tabPanel("GARCH Forecast", 
-                 plotlyOutput("garchForecastPlot", height = "500px")),
-        tabPanel("Price Forecast", 
-                 plotlyOutput("forecastPlot", height = "500px")),
-        tabPanel("DCC Analysis", 
-                 plotlyOutput("dccPlot", height = "500px")),
-        tabPanel("Historical Risk", 
-                 plotlyOutput("historicalRiskPlot", height = "500px")),
-        tabPanel("RMSE vs K", 
-                 plotlyOutput("rmsePlot", height = "500px"))
-      )
-    )
-  )
-)
+
 
 # Server Section
 server <- function(input, output, session) {
