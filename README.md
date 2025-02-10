@@ -4,7 +4,7 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 
 ## Features:
-- Machine Learning and Neural Network Price Forecasting using LSTM, ARIMA, and MSGARCH.
+- Comprehensive Price Forecasting using ARIMA, and MSGARCH.
 - Dynamic Conditional Correlation (DCC) Analysis with 2 Assets.
 - Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH.
 - Historical Risk Analysis with VaR and ES.
@@ -47,6 +47,7 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 
 Working on: 
-- Debugging Stock Price Forecast- stack trace error
+- Debugging Stock Price Forecast
+- Deep Learning and Neural Net integration into Price and Risk forecasting
 - DCC with 2+ Assests
   
