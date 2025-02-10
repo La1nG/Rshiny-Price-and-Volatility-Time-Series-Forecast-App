@@ -48,6 +48,6 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 Working on: 
 - Debugging Stock Price Forecast
-- Deep Learning and Neural Net integration into Price and Risk forecasting
+- After ARIMA-MSGARCH is complete, begin BMA implementation, then returning to attempting LSTM
 - DCC with 2+ Assests
   
