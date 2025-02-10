@@ -13,8 +13,6 @@ library(TTR)
 
 library(forecast)     
 library(MSGARCH)      
-library(torch)       
-
 
 # Pre-fetch ticker symbols from quantmod's stockSymbols() at startup.
 allTickers <- tryCatch({
@@ -26,7 +24,51 @@ allTickers <- tryCatch({
 usTickerSymbols <- sort(unique(allTickers$Symbol))
 
 
-
+ui <- fluidPage(
+  theme = shinytheme("darkly"),
+  titlePanel("Financial Risk Dashboard"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      selectizeInput(
+        inputId = "ticker",
+        label = "Asset(s):",
+        choices = usTickerSymbols,  
+        multiple = TRUE, 
+        selected = "MSFT",
+        options = list(
+          create = TRUE,
+          placeholder = "Type ticker symbol(s) here..."
+        )
+      ),
+      dateRangeInput("daterange", "Date Range:", 
+                     start = Sys.Date() - 366, end = Sys.Date()),
+      selectInput("garch_model", "GARCH Model:",
+                  choices = c("sGARCH", "gjrGARCH", "eGARCH")),
+      numericInput("window", "Rolling Window (Days):", value = 252, min = 30),
+      numericInput("k", "Number of Neighbors (k):", value = 5, min = 1),
+      actionButton("analyze", "Analyze"),
+      br(),
+      h3("Risk Measures:"),
+      verbatimTextOutput("modelSummary"),
+      textOutput("varResult"),
+      textOutput("esResult"),
+      textOutput("sharpeRatioResult"),
+      textOutput("optionPrice")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("GARCH Forecast", plotlyOutput("garchForecastPlot", height = "500px")),
+        tabPanel("Price Forecast", plotlyOutput("forecastPlot", height = "500px")),
+        tabPanel("DCC Analysis", plotlyOutput("dccPlot", height = "500px")),
+        tabPanel("Historical Risk", plotlyOutput("historicalRiskPlot", height = "500px")),
+        tabPanel("RMSE vs K", plotlyOutput("rmsePlot", height = "500px"))
+      )
+    )
+  )
+)
+  
 # Server Section
 server <- function(input, output, session) {
   
@@ -163,173 +205,10 @@ server <- function(input, output, session) {
     })
   })
   
-  ### Additional Data for Price Forecasting ###
-  
-  enrichedData <- reactive({
-    req(stockData(), returnsData())
-    prices <- Cl(stockData())[, 1]
-    returns <- as.numeric(returnsData())
-    # Calculate technical indicators
-    ma20 <- SMA(prices, n = 20)
-    rsi14 <- RSI(prices, n = 14)
-    valid_index <- which(!is.na(ma20) & !is.na(rsi14))
-    df <- data.frame(
-      Returns = returns[valid_index],
-      MA20 = as.numeric(ma20[valid_index]),
-      RSI14 = as.numeric(rsi14[valid_index])
-    )
-    # Add previous day's return as a feature
-    df$Lag1 <- c(NA, head(df$Returns, -1))
-    df <- na.omit(df)
-    df
-  })
-  
-  ### LSTM Component for Nonlinear Forecasting using torch ###
-  
-  # Train an LSTM model on data using torch.
-  # sliding window (here window_size = 10) over selected features.
-  lstmModel <- reactive({
-    req(enrichedData())
-    data <- enrichedData()
-    window_size <- 10
-    num_samples <- nrow(data)
-    if(num_samples <= window_size) {
-      showNotification("Not enough data for LSTM training", type = "error")
-      return(NULL)
-    }
-    
-    # Build input sequences and targets
-    X <- array(0, dim = c(num_samples - window_size, window_size, 3))
-    y <- numeric(num_samples - window_size)
-    for(i in 1:(num_samples - window_size)) {
-      X[i,,] <- as.matrix(data[i:(i+window_size-1), c("MA20", "RSI14", "Lag1")])
-      y[i] <- data$Returns[i+window_size]
-    }
-    
-    # Split into training (80%) and validation sets
-    train_size <- floor(0.8 * dim(X)[1])
-    X_train <- X[1:train_size,,]
-    y_train <- y[1:train_size]
-    X_val <- X[(train_size+1):dim(X)[1],,]
-    y_val <- y[(train_size+1):dim(X)[1]]
-    
-    # Convert arrays to torch tensors
-    X_train <- torch_tensor(X_train, dtype = torch_float())
-    y_train <- torch_tensor(y_train, dtype = torch_float())$unsqueeze(2)
-    X_val <- torch_tensor(X_val, dtype = torch_float())
-    y_val <- torch_tensor(y_val, dtype = torch_float())$unsqueeze(2)
-    X_full <- torch_tensor(X, dtype = torch_float())
-    
-    # Define the LSTM model using torch
-    lstm_net <- nn_module(
-      "LSTMModel",
-      initialize = function(input_size, hidden_size, num_layers, dropout) {
-        self$lstm <- nn_lstm(
-          input_size = input_size,
-          hidden_size = hidden_size,
-          num_layers = num_layers,
-          batch_first = TRUE,
-          dropout = dropout
-        )
-        self$fc <- nn_linear(hidden_size, 1)
-      },
-      forward = function(x) {
-        # x: (batch, seq_length, input_size)
-        out <- self$lstm(x)
-        # out[[1]]: outputs for all timesteps; extract the last time step
-        last_output <- out[[1]][ , dim(x)[2], ]
-        self$fc(last_output)
-      }
-    )
-    
-    # Instantiate the model
-    input_size <- 3
-    hidden_size <- 50
-    num_layers <- 1
-    dropout <- 0.2
-    net <- lstm_net(input_size, hidden_size, num_layers, dropout)
-    
-    # Define optimizer and loss function
-    optimizer <- optim_adam(net$parameters, lr = 0.001)
-    loss_fn <- nn_mse_loss()
-    
-    # Training loop parameters
-    epochs <- 100
-    batch_size <- 16
-    best_val_loss <- Inf
-    patience <- 10
-    no_improve_epochs <- 0
-    
-    n_train <- X_train$size(1)
-    
-    for(epoch in 1:epochs) {
-      net$train()
-      permutation <- sample(n_train)
-      total_loss <- 0
-      
-      for(i in seq(1, n_train, by = batch_size)) {
-        indices <- permutation[i:min(i+batch_size-1, n_train)]
-        batch_X <- X_train[indices,,, drop = FALSE]
-        batch_y <- y_train[indices,,, drop = FALSE]
-        
-        optimizer$zero_grad()
-        output <- net(batch_X)
-        loss <- loss_fn(output, batch_y)
-        loss$backward()
-        optimizer$step()
-        total_loss <- total_loss + loss$item() * length(indices)
-      }
-      
-      avg_train_loss <- total_loss / n_train
-      
-      # Evaluate on validation set
-      net$eval()
-      with_no_grad({
-        val_output <- net(X_val)
-        val_loss <- loss_fn(val_output, y_val)$item()
-      })
-      
-      # Early stopping
-      if(val_loss < best_val_loss) {
-        best_val_loss <- val_loss
-        no_improve_epochs <- 0
-      } else {
-        no_improve_epochs <- no_improve_epochs + 1
-      }
-      
-      if(no_improve_epochs >= patience) {
-        cat("Early stopping at epoch", epoch, "\n")
-        break
-      }
-      
-      cat(sprintf("Epoch %d: Train Loss = %.4f, Val Loss = %.4f\n", epoch, avg_train_loss, val_loss))
-    }
-    
-    # Return the trained model, the window size, and the full input sequences (as a torch tensor)
-    list(model = net, window_size = window_size, X_full = X_full)
-  })
-  
-  # Forecast the next return using the torch LSTM model.
-  lstmForecast <- reactive({
-    req(lstmModel())
-    mod_info <- lstmModel()
-    net <- mod_info$model
-    window_size <- mod_info$window_size
-    X_full <- mod_info$X_full
-    # Use the last available sequence from the training data.
-    last_seq <- X_full[dim(X_full)[1], , , drop = FALSE]
-    last_seq <- last_seq$unsqueeze(1)  # add batch dimension
-    net$eval()
-    with_no_grad({
-      pred <- net(last_seq)
-    })
-    as.numeric(pred$item())
-  })
-  
-  ### Hybrid Price Forecast: ARIMA+MSGARCH & LSTM  ###
+  ### Hybrid Price Forecast: ARIMA + MSGARCH ###
   
   priceForecast <- reactive({
-    req(stockData(), returnsData(), enrichedData(), lstmForecast())
+    req(stockData(), returnsData())
     
     cat("Starting ARIMA+MSGARCH forecasting...\n")
     
@@ -341,7 +220,7 @@ server <- function(input, output, session) {
     cat("Residuals computed, length =", length(resids), "\n")
     
     msgarch_spec <- CreateSpec(
-      variance.spec = list(model = input$garch_model, garchOrder = c(1,1)),
+      variance.spec = list(model = input$garch_model, garchOrder = c(1, 1)),
       distribution.spec = list(distribution = "std"),
       switch.spec = list(K = 2)
     )
@@ -361,14 +240,9 @@ server <- function(input, output, session) {
     }
     cat("Final vol_forecast length:", length(vol_forecast), "\n")
     
-    # ---- Nonlinear Component: LSTM Forecast ----
-    lstm_pred <- lstmForecast()  # single-step torch LSTM forecast for return
-    cat("LSTM forecast obtained:", lstm_pred, "\n")
-    lstm_forecast <- rep(lstm_pred, 30)
-    
-    # ---- Ensemble Integration ----
-    combined_mu <- 0.6 * as.numeric(arima_forecast) + 0.4 * as.numeric(lstm_forecast)
-    cat("Ensemble drift computed\n")
+    # ---- Use ARIMA forecast directly for drift ----
+    combined_mu <- as.numeric(arima_forecast)
+    cat("Drift computed from ARIMA forecast\n")
     
     last_close <- as.numeric(tail(Cl(stockData())[, 1], 1))
     cat("Last closing price:", last_close, "\n")
@@ -512,7 +386,7 @@ server <- function(input, output, session) {
     req(priceForecast())
     forecast <- priceForecast()
     plot_ly(x = forecast$days, y = forecast$prices, type = "scatter", mode = "lines") %>%
-      layout(title = "Price Forecast (Hybrid ARIMA+MSGARCH & torch LSTM Ensemble)",
+      layout(title = "Price Forecast (Hybrid ARIMA+MSGARCH)",
              xaxis = list(title = "Days Ahead"),
              yaxis = list(title = "Forecasted Price"))
   })
@@ -539,3 +413,5 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
+
