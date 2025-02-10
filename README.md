@@ -47,6 +47,6 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 
 Working on: 
-- Debugging Stock Price Forecast- Fatal Error from TORCH package
+- Debugging Stock Price Forecast- stack trace error
 - DCC with 2+ Assests
   
