@@ -1,0 +1,107 @@
+# Load libraries
+library(shiny)
+library(bsts)
+library(quantmod)
+library(ggplot2)
+library(tidyverse)
+library(rugarch)
+library(forecast)
+
+# Function to fetch stock data safely
+get_stock_data <- function(ticker, start_date = "2024-01-01") {
+  stock_data <- tryCatch({
+    data <- getSymbols(ticker, src = "yahoo", from = start_date, to = Sys.Date(), auto.assign = FALSE)
+    stock_prices <- Cl(data)
+    stock_returns <- diff(log(stock_prices))  # Compute log returns
+    
+    # Convert to numeric vector and remove NAs
+    stock_returns <- as.numeric(na.omit(stock_returns))
+    
+    return(data.frame(Date = index(stock_prices)[-1], Stock_Returns = stock_returns))
+  }, error = function(e) {
+    return(NULL)  # Return NULL if data retrieval fails
+  })
+}
+
+
+# Function to run BSTS
+run_bsts <- function(data, forecast_horizon, niter, burn) {
+  # Ensure Stock_Returns is a numeric vector
+  stock_returns <- as.numeric(data$Stock_Returns)
+  
+  # Check if it contains NA values
+  if (any(is.na(stock_returns))) {
+    stop("Error: Stock_Returns contains NA values. Check data preprocessing.")
+  }
+  
+  ss <- AddLocalLinearTrend(list(), stock_returns)
+  model <- bsts(stock_returns, state.specification = ss, niter = niter, seed = 42)
+  pred <- predict(model, horizon = forecast_horizon)
+  
+  return(list(model = model, forecast = pred))
+}
+
+
+# Function to run ARIMA + GARCH
+run_arima_garch <- function(data, forecast_horizon) {
+  arima_fit <- auto.arima(data$Stock_Returns)
+  garch_spec <- ugarchspec(variance.model = list(model = "sGARCH"), 
+                           mean.model = list(armaOrder = c(1,1)), 
+                           distribution.model = "std")
+  garch_fit <- ugarchfit(spec = garch_spec, data = data$Stock_Returns)
+  garch_forecast <- ugarchforecast(garch_fit, n.ahead = forecast_horizon)
+  
+  return(garch_forecast@forecast$seriesFor)
+}
+
+# Define UI
+ui <- fluidPage(
+  titlePanel("Stock Forecasting: BSTS vs ARIMA-GARCH"),
+  sidebarLayout(
+    sidebarPanel(
+      textInput("ticker", "Enter Stock Ticker:", value = "AAPL"),
+      numericInput("forecast_horizon", "Forecast Horizon (days):", value = 30, min = 1),
+      sliderInput("niter", "MCMC Iterations (BSTS):", min = 1000, max = 10000, value = 5000, step = 500),
+      sliderInput("burn", "Burn-in Period:", min = 500, max = 5000, value = 1000, step = 500),
+      actionButton("run_forecast", "Run Forecast")
+    ),
+    mainPanel(
+      tabsetPanel(
+        tabPanel("BSTS Forecast", plotOutput("bsts_plot")),
+        tabPanel("ARIMA+GARCH Forecast", plotOutput("arima_plot"))
+      )
+    )
+  )
+)
+
+# Define server
+server <- function(input, output) {
+  observeEvent(input$run_forecast, {
+    data <- get_stock_data(input$ticker)
+    
+    if (is.null(data)) {
+      showNotification("Error fetching stock data. Check ticker symbol.", type = "error")
+      return()
+    }
+    
+    bsts_results <- run_bsts(data, input$forecast_horizon, input$niter, input$burn)
+    arima_forecast <- run_arima_garch(data, input$forecast_horizon)
+    
+    output$bsts_plot <- renderPlot({
+      plot(bsts_results$forecast, main = paste("BSTS Forecast for", input$ticker))
+    })
+    
+    output$arima_plot <- renderPlot({
+      forecast_dates <- seq(Sys.Date(), by = "days", length.out = input$forecast_horizon)
+      forecast_df <- data.frame(Date = forecast_dates, Price = as.numeric(arima_forecast))
+      
+      ggplot(forecast_df, aes(x = Date, y = Price)) +
+        geom_line(color = "red", size = 1) +
+        labs(title = paste("ARIMA+GARCH Forecast for", input$ticker),
+             y = "Stock Price", x = "Date") +
+        theme_minimal()
+    })
+  })
+}
+
+shinyApp(ui = ui, server = server)
