@@ -1,0 +1,198 @@
+### This file is to hold a WIP for the stock price forecasting section ###
+
+
+library(reticulate)
+library(shiny)
+library(shinydashboard)
+library(plotly)
+library(forecast)
+library(bsts)
+library(DT)
+library(tidyverse)
+library(lubridate)
+library(quantmod)
+
+torch <- import("torch")
+nn <- import("torch.nn")
+optim <- import("torch.optim")
+
+define_lstm_model <- function(input_size, hidden_size, output_size) {
+  py_run_string(glue::glue("
+import torch.nn as nn
+class StockLSTM(nn.Module):
+    def __init__(self):
+        super(StockLSTM, self).__init__()
+        self.lstm = nn.LSTM(input_size={input_size}, hidden_size={hidden_size}, batch_first=True)
+        self.fc = nn.Linear({hidden_size}, {output_size})
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        out = self.fc(out[:, -1, :])
+        return out
+
+model = StockLSTM()"))
+  return(py$model)
+}
+
+fetch_stock_data <- function(symbols, start_date, end_date) {
+  lapply(symbols, function(sym) {
+    df <- getSymbols(
+      sym,
+      src = "yahoo",
+      from = start_date,
+      to = end_date,
+      auto.assign = FALSE
+    )
+    data.frame(Date = index(df), Price = as.numeric(Cl(df)), Symbol = sym)
+  }) %>% bind_rows()
+}
+
+forecast_arima <- function(series, h) {
+  model <- auto.arima(series)
+  forecast(model, h = h)
+}
+
+forecast_bsts <- function(series, h) {
+  state_spec <- AddLocalLinearTrend(list(), series)
+  model <- bsts(series, state.specification = state_spec, niter = 1000)
+  predict(model, horizon = h)
+}
+
+forecast_lstm <- function(series, h, input_size = 1, hidden_size = 64, output_size = 1) {
+  price_tensor <- torch$tensor(as.numeric(series), dtype = torch$float32)$reshape(c(-1L, 1L, 1L))
+  
+  model <- define_lstm_model(input_size, hidden_size, output_size)
+  criterion <- nn$MSELoss()
+  optimizer <- optim$Adam(model$parameters(), lr = 0.001)
+  
+  for (epoch in 1:500) {
+    optimizer$zero_grad()
+    output <- model(price_tensor)
+    loss <- criterion(output$squeeze(), price_tensor$squeeze())
+    loss$backward()
+    optimizer$step()
+  }
+  
+  preds <- c()
+  input_seq <- price_tensor[(length(price_tensor) - 1), , ]
+  
+  for (i in 1:h) {
+    pred <- model(input_seq$unsqueeze(1L))
+    preds <- c(preds, pred$item())
+    input_seq <- torch$tensor(matrix(pred$item(), nrow = 1, ncol = 1), dtype = torch$float32)
+  }
+  
+  preds
+}
+
+bma_weights <- function(vars) {
+  weights <- 1 / vars
+  weights / sum(weights)
+}
+
+ui <- dashboardPage(
+  dashboardHeader(title = "Stock Forecasting App"),
+  dashboardSidebar(
+    textInput("symbol", "Stock Symbols", "AAPL"),
+    dateInput("start_date", "Start Date", value = Sys.Date() - years(3)),
+    dateInput("end_date", "End Date", value = Sys.Date()),
+    numericInput("forecast_days", "Forecast Days", 30, min = 1, max = 365),
+    actionButton("fetch_data", "Fetch Data"),
+    actionButton("run_forecast", "Run Forecast")
+  ),
+  dashboardBody(
+    fluidRow(
+      box(title = "Stock Plot", width = 12, plotlyOutput("forecastPlot")),
+      box(title = "Data Table", width = 12, dataTableOutput("table"))
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  data <- reactiveVal(NULL)
+  
+  observeEvent(input$fetch_data, {
+    symbols <- strsplit(input$symbol, ",")[[1]] %>% trimws()
+    stock_data <- fetch_stock_data(symbols, input$start_date, input$end_date)
+    data(stock_data)
+  })
+  
+  output$table <- renderDataTable({
+    req(data())
+    datatable(data())
+  })
+  
+  observeEvent(input$run_forecast, {
+    df <- data()
+    req(df)
+    
+    forecasts <- lapply(unique(df$Symbol), function(sym) {
+      symbol_df <- df %>% filter(Symbol == sym)
+      price_series <- ts(symbol_df$Price, frequency = 365)
+      
+      arima_forecast <- forecast_arima(price_series, input$forecast_days)
+      bsts_forecast <- forecast_bsts(price_series, input$forecast_days)
+      lstm_forecast <- forecast_lstm(price_series, input$forecast_days)
+      
+      vars <- c(var(arima_forecast$mean), var(bsts_forecast$mean), var(lstm_forecast))
+      weights <- bma_weights(vars)
+      
+      final_forecast <- weights[1] * arima_forecast$mean +
+        weights[2] * bsts_forecast$mean +
+        weights[3] * lstm_forecast
+      
+      data.frame(
+        Date = seq(max(symbol_df$Date) + 1, by = "day", length.out = input$forecast_days),
+        Forecast = final_forecast,
+        Symbol = sym
+      )
+    })
+    
+    forecast_df <- bind_rows(forecasts)
+    
+    output$forecastPlot <- renderPlotly({
+      plot_ly() %>%
+        add_lines(data = df, x = ~Date, y = ~Price, color = ~Symbol, line = list(color = "#2962FF")) %>%
+        add_lines(data = forecast_df, x = ~Date, y = ~Forecast, color = ~Symbol, line = list(dash = 'dash', color = "#FF4081")) %>%
+        layout(
+          title = "Stock Forecast",
+          xaxis = list(title = "Date"),
+          yaxis = list(title = "Price")
+        )
+    })
+  })
+}
+
+shinyApp(ui, server)
+
+# Define server
+server <- function(input, output) {
+  observeEvent(input$run_forecast, {
+    data <- get_stock_data(input$ticker)
+    
+    if (is.null(data)) {
+      showNotification("Error fetching stock data. Check ticker symbol.", type = "error")
+      return()
+    }
+    
+    bsts_results <- run_bsts(data, input$forecast_horizon, input$niter, input$burn)
+    arima_forecast <- run_arima_garch(data, input$forecast_horizon)
+    
+    output$bsts_plot <- renderPlot({
+      plot(bsts_results$forecast, main = paste("BSTS Forecast for", input$ticker))
+    })
+    
+    output$arima_plot <- renderPlot({
+      forecast_dates <- seq(Sys.Date(), by = "days", length.out = input$forecast_horizon)
+      forecast_df <- data.frame(Date = forecast_dates, Price = as.numeric(arima_forecast))
+      
+      ggplot(forecast_df, aes(x = Date, y = Price)) +
+        geom_line(color = "red", size = 1) +
+        labs(title = paste("ARIMA+GARCH Forecast for", input$ticker),
+             y = "Stock Price", x = "Date") +
+        theme_minimal()
+    })
+  })
+}
+
+shinyApp(ui = ui, server = server)
