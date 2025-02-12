@@ -4,7 +4,7 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 
 ## Features:
-- Comprehensive Price Forecasting using ARIMA, and MSGARCH.
+- Comprehensive Price Forecasting using ARIMA, and BSTS.
 - Dynamic Conditional Correlation (DCC) Analysis with 2 Assets.
 - Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH.
 - Historical Risk Analysis with VaR and ES.
@@ -48,6 +48,6 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 Working on: 
 - Debugging Stock Price Forecast
-- After ARIMA-MSGARCH is complete, begin BMA implementation, then returning to attempting LSTM
+- After ARIMA-BSTS is complete, begin BMA implementation, then returning to attempting LSTM
 - DCC with 2+ Assests
   
