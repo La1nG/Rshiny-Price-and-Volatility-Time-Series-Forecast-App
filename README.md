@@ -17,7 +17,7 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 
 
-## sGARCH, eGARCH, gjrGARCH, MSGARCH
+## sGARCH, eGARCH, gjrGARCH
 
 ### sGARCH
 
@@ -25,7 +25,7 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 ### gjrGARCG
 
-### MSGARCH
+
 
 
 
