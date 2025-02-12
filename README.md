@@ -47,7 +47,6 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 
 Working on: 
-- Debugging Stock Price Forecast
-- After ARIMA-BSTS is complete, begin BMA implementation, then returning to attempting LSTM
+- Debugging Stock Price Forecast - Fixing its visual issues and touching up any technical additions then will integrate it into main App
 - DCC with 2+ Assests
   
