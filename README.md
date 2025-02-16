@@ -52,7 +52,7 @@ The only prerequisites needed to set-up and run the App are to install the above
 
 
 Working on: 
-- Debugging Stock Price Forecast -Converging to a constant value
-- Then will integrate it into main App
+- Debugging Stock Price Forecast - Finetuning hyperparameters and enhancing ARIMA, BSTS, LSTM to ensure best quality of forecasts
+- Integrating Stock forecast into Main app
 - DCC with 2+ Assests
   
