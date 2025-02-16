@@ -4,7 +4,7 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 
 ## Features:
-- Comprehensive Price Forecasting using ARIMA, and BSTS.
+- Comprehensive Deep Learning Price Forecasting using ARIMA, BSTS and LSTM.
 - Dynamic Conditional Correlation (DCC) Analysis with 2 Assets.
 - Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH.
 - Historical Risk Analysis with VaR and ES.
@@ -25,13 +25,16 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 
 ### gjrGARCH
 
-
-
-
-
-
 ## K-NN 
 K-NN (k-nearest neighbors) is a regression and classification model that predicts a target value by averaging the values of its nearest neighbours (data-points of an applied input). K-NN is a non-parametric and instance-based learning algorithm that can learn when a test-point is provided, making it effective for continuous and non linear data predictions. In this app K-NN is used to forecast returns based on lagged returns and volatility (supported by GARCH) and how RMSE changes with different k values.
+
+# Price Forecasting
+
+### ARIMA
+
+### BSTS
+
+### LSTM
 
 
 # Installation
