@@ -78,7 +78,7 @@ forecast_seq2seq_lstm_with_metrics <- function(series, h, input_size = 1, hidden
   train_series <- series[1:train_size]
   test_series <- series[(train_size + 1):series_len]
   
-  # Normalize the training series only (common practice)
+  # Normalize the training series only 
   norm <- normalize_series(train_series)
   price_tensor <- torch$tensor(norm$scaled, dtype = torch$float32)
   
