@@ -48,6 +48,8 @@ install.packages(c("shiny", "shinythemes", "quantmod", "rugarch", "FNN", "plotly
 
 The only prerequisites needed to set-up and run the App are to install the above packages. Any important additional Notes for customisation or error decoding will be written alongside the function code in the app.  
 
+`Note* After LSTM is added to the Main App there will be more set up requirements added here`
+
 
 Working on: 
 - Debugging Stock Price Forecast -Converging to a constant value
