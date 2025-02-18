@@ -19,7 +19,7 @@ library(TTR)
 library(zoo)
 library(fredr)
 
-source("data_acquisition.r") # Improved Data Acquisition & Preprocessing Module
+source("app.r") # Improved Data Acquisition & Preprocessing Module
 
 torch <- import("torch")
 nn <- import("torch.nn")
