@@ -1,6 +1,8 @@
 ### This file is to hold a WIP for the stock price forecasting section ###
 
 
+
+
 library(reticulate)
 library(shiny)
 library(shinydashboard)
@@ -13,6 +15,11 @@ library(lubridate)
 library(quantmod)
 library(Metrics)
 library(bizdays)
+library(TTR)
+library(zoo)
+library(fredr)
+
+source("data_acquisition.r") # Improved Data Acquisition & Preprocessing Module
 
 torch <- import("torch")
 nn <- import("torch.nn")
@@ -36,7 +43,6 @@ model = Seq2SeqLSTM()"))
   return(py$model)
 }
 
-
 normalize_series <- function(series) {
   min_val <- min(series, na.rm = TRUE)
   max_val <- max(series, na.rm = TRUE)
@@ -48,23 +54,9 @@ denormalize_series <- function(scaled_values, min_val, max_val) {
   scaled_values * (max_val - min_val) + min_val
 }
 
-fetch_stock_data <- function(symbols, start_date, end_date) {
-  lapply(symbols, function(sym) {
-    df <- getSymbols(
-      sym,
-      src = "yahoo",
-      from = start_date,
-      to = end_date,
-      auto.assign = FALSE
-    )
-    data.frame(Date = index(df), Price = as.numeric(Cl(df)), Symbol = sym)
-  }) %>% bind_rows()
-}
-
 calculate_metrics <- function(actual, predicted) {
   list(RMSE = rmse(actual, predicted), MAPE = mape(actual, predicted))
 }
-
 
 forecast_seq2seq_lstm_with_metrics <- function(series, h, input_size = 1, hidden_size = 128, window_size = 30, epochs = 500, patience = 20, learning_rate = 0.0005) {
   series <- as.numeric(series)
@@ -78,27 +70,21 @@ forecast_seq2seq_lstm_with_metrics <- function(series, h, input_size = 1, hidden
   train_series <- series[1:train_size]
   test_series <- series[(train_size + 1):series_len]
   
-  # Normalize the training series only 
   norm <- normalize_series(train_series)
   price_tensor <- torch$tensor(norm$scaled, dtype = torch$float32)
   
-  # Prepare training data
   X_train <- list()
   y_train <- list()
   
   for (i in 1:(train_size - window_size - h + 1)) {
     X_train[[i]] <- price_tensor[(i - 1):(i + window_size - 2)]$unsqueeze(1L)
     y_train[[i]] <- price_tensor[(i + window_size - 1):(i + window_size + h - 1)]
-    
   }
-  
   
   X_price_tensor <- torch$stack(X_train)
   y_price_tensor <- torch$stack(y_train)
   
-  # Initialize model
   model <- define_seq2seq_lstm_model(input_size, hidden_size, h)
-  
   criterion <- nn$MSELoss()
   optimizer <- optim$Adam(model$parameters(), lr = learning_rate)
   
@@ -106,7 +92,6 @@ forecast_seq2seq_lstm_with_metrics <- function(series, h, input_size = 1, hidden
   best_loss <- Inf
   epochs_no_improve <- 0
   
-  # Training Loop
   for (epoch in 1:epochs) {
     optimizer$zero_grad()
     output <- model(X_price_tensor)
@@ -115,7 +100,6 @@ forecast_seq2seq_lstm_with_metrics <- function(series, h, input_size = 1, hidden
     optimizer$step()
     
     loss_values[epoch] <- loss$item()
-    
     if (loss$item() < best_loss) {
       best_loss <- loss$item()
       epochs_no_improve <- 0
@@ -129,32 +113,26 @@ forecast_seq2seq_lstm_with_metrics <- function(series, h, input_size = 1, hidden
     }
   }
   
-  # Forecasting using the last window
-  input_seq <- price_tensor[(train_size - window_size + 1):train_size]  # Last window_size values
-  input_tensor <- input_seq$unsqueeze(1L)$unsqueeze(0L)  # Shape [1, window_size, 1]
+  input_seq <- price_tensor[(train_size - window_size + 1):train_size]
+  input_tensor <- input_seq$unsqueeze(1L)$unsqueeze(0L)
   
-  with_no_grad <- torch$no_grad()
-  preds_tensor <- with(torch$no_grad(), {
+  preds_tensor <- torch$no_grad()$enter({
     model(input_tensor)
   })
+  
   preds <- as.numeric(preds_tensor$detach()$cpu()$numpy())
-  
-  
   final_predictions <- denormalize_series(preds, norm$min_val, norm$max_val)
+  
   metrics <- calculate_metrics(test_series, final_predictions)
   
   list(predictions = final_predictions, loss_values = loss_values, metrics = metrics)
 }
 
-
-
-
-
-
 ui <- dashboardPage(
-  dashboardHeader(title = "Stock Forecasting App"),
+  dashboardHeader(title = "Asset Forecasting App"),
   dashboardSidebar(
-    textInput("symbol", "Stock Symbols", "AAPL"),
+    textInput("symbol", "Symbols (comma-separated)", "AAPL"),
+    selectInput("asset_type", "Asset Type", choices = c("stock", "forex", "crypto", "commodity", "index")),
     dateInput("start_date", "Start Date", value = Sys.Date() - years(3)),
     dateInput("end_date", "End Date", value = Sys.Date()),
     numericInput("forecast_days", "Forecast Days", 30, min = 1, max = 365),
@@ -180,13 +158,13 @@ server <- function(input, output, session) {
   
   observeEvent(input$fetch_data, {
     symbols <- strsplit(input$symbol, ",")[[1]] %>% trimws()
-    stock_data <- fetch_stock_data(symbols, input$start_date, input$end_date)
-    data(stock_data)
-  })
-  
-  output$table <- renderDataTable({
-    req(data())
-    datatable(data())
+    
+    fetched_data <- lapply(symbols, function(sym) {
+      process_asset_data(sym, input$asset_type, input$start_date, input$end_date)
+    })
+    
+    combined_data <- bind_rows(fetched_data)
+    data(combined_data)
   })
   
   observeEvent(input$run_forecast, {
@@ -206,8 +184,8 @@ server <- function(input, output, session) {
       train_size <- length(price_series) - h
       train_series <- price_series[1:train_size]
       test_series <- price_series[(train_size + 1):length(price_series)]
-     
-       lstm_result <- forecast_seq2seq_lstm_with_metrics(
+      
+      lstm_result <- forecast_seq2seq_lstm_with_metrics(
         train_series,
         h,
         hidden_size = input$hidden_size,
@@ -220,76 +198,23 @@ server <- function(input, output, session) {
       arima_metrics <- calculate_metrics(test_series, as.numeric(arima_forecast$mean))
       
       state_spec <- AddLocalLinearTrend(list(), train_series)
-      bsts_model <- bsts(train_series, state.specification = state_spec, niter = 10000)
+      bsts_model <- bsts(train_series, state.specification = state_spec, niter = 1000)
       bsts_forecast <- predict(bsts_model, horizon = h)
       bsts_metrics <- calculate_metrics(test_series, as.numeric(bsts_forecast$mean))
       
       hybrid_forecast <- (lstm_result$predictions + as.numeric(arima_forecast$mean) + as.numeric(bsts_forecast$mean)) / 3
       hybrid_metrics <- calculate_metrics(test_series, hybrid_forecast)
       
-      future_dates <- bizseq(max(symbol_df$Date) + 1, max(symbol_df$Date) + 365, cal)[1:h]
-      
-      forecast_df <- data.frame(
-        Date = future_dates,
-        LSTM = lstm_result$predictions,
-        ARIMA = as.numeric(arima_forecast$mean),
-        BSTS = as.numeric(bsts_forecast$mean),
-        Hybrid = hybrid_forecast,
-        Symbol = sym
-      )
-      
-      metrics_df <- data.frame(
-        Symbol = sym,
-        Model = c("LSTM", "ARIMA", "BSTS", "Hybrid"),
-        RMSE = c(lstm_result$metrics$RMSE, arima_metrics$RMSE, bsts_metrics$RMSE, hybrid_metrics$RMSE),
-        MAPE = c(lstm_result$metrics$MAPE, arima_metrics$MAPE, bsts_metrics$MAPE, hybrid_metrics$MAPE)
-      )
-      
       list(
-        forecast_df = forecast_df,
-        metrics_df = metrics_df,
-        loss_values = lstm_result$loss_values
+        LSTM = lstm_result,
+        ARIMA = arima_metrics,
+        BSTS = bsts_metrics,
+        Hybrid = hybrid_metrics
       )
     })
     
-    all_forecast_df <- bind_rows(lapply(forecasts, function(x) x$forecast_df))
-    all_metrics_df <- bind_rows(lapply(forecasts, function(x) x$metrics_df))
-    loss_plots_data <- lapply(forecasts, function(x) x$loss_values)
-    
-    forecast_results(list(
-      forecast_df = all_forecast_df,
-      metrics_df = all_metrics_df,
-      loss_plots_data = loss_plots_data
-    ))
-    
-    output$forecastPlot <- renderPlotly({
-      plot_ly() %>%
-        add_lines(data = df, x = ~Date, y = ~Price, color = ~Symbol, name = ~paste(Symbol, "Actual")) %>%
-        add_lines(data = all_forecast_df, x = ~Date, y = ~LSTM, color = ~Symbol, name = ~paste(Symbol, "LSTM"), line = list(dash = 'solid')) %>%
-        add_lines(data = all_forecast_df, x = ~Date, y = ~ARIMA, color = ~Symbol, name = ~paste(Symbol, "ARIMA"), line = list(dash = 'dot')) %>%
-        add_lines(data = all_forecast_df, x = ~Date, y = ~BSTS, color = ~Symbol, name = ~paste(Symbol, "BSTS"), line = list(dash = 'dashdot')) %>%
-        add_lines(data = all_forecast_df, x = ~Date, y = ~Hybrid, color = ~Symbol, name = ~paste(Symbol, "Hybrid"), line = list(dash = 'longdash'))
-    })
-    
-    output$metricsTable <- renderDataTable({
-      datatable(all_metrics_df)
-    })
-    
-    output$lossPlot <- renderPlotly({
-      plot_ly(y = loss_plots_data[[1]], type = 'scatter', mode = 'lines') %>%
-        layout(title = paste("LSTM Loss (", unique(df$Symbol)[1], ")"))
-    })
+    forecast_results(forecasts)
   })
-  
-  output$download_forecast <- downloadHandler(
-    filename = function() {
-      paste("forecast_results_", Sys.Date(), ".csv", sep = "")
-    },
-    content = function(file) {
-      write.csv(forecast_results()$forecast_df, file, row.names = FALSE)
-    }
-  )
 }
-
 
 shinyApp(ui, server)
