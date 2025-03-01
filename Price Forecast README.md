@@ -6,7 +6,6 @@ As I developed and researched more I identified ways to smooth overfitting such 
 
 Working On:
 - Incorporating Exogenous Variables into ARIMA (ARIMAX) and BSTS
-- Utilise residual based learning in the LSTM model from ARIMA and BSTS
 - Research an optimal training method for the price app and implement it
 - Huber loss for the Loss plot
 
