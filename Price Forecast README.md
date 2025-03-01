@@ -8,6 +8,7 @@ Working On:
 - Incorporating Exogenous Variables into ARIMA (ARIMAX) and BSTS
 - Research an optimal training method for the price app and implement it
 - Huber loss for the Loss plot
+- XGBoost + Prophet Integration
 
 Features:
 
