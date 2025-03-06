@@ -40,7 +40,7 @@ Contributions:
 
 ## Model Evaluation Techniques
 
-### Huber Loss Plot - To Be Implemented
+### Huber Loss - To Be Implemented
 
 
 
