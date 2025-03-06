@@ -26,7 +26,7 @@ The standard GARCH model extends the traditional ARCH model by allowing volatili
 Unlike sGARCH, eGARCH extends to capture asymmetry using a logarithmic transformation, such as that large negative shocks increase volatility more than large than large positive shocks (large shocks have a exponential impact on volatility). 
 
 ### gjrGARCH
-GJR-GARCH is also a modified version of the sGARCH function that seeks to capture asymmetry (large shocks have a quadratic impact on volatility), however, instead of using logarithms to capture the effect, GJR-GARCH uses an indicator function rather than log variance.
+GJR-GARCH is similar to eGARCH in its nature that seeks to capture asymmetry (large shocks have a quadratic impact on volatility instead), however, instead of using logarithms to capture the effect, GJR-GARCH uses an indicator function rather than log variance.
 
 
 ## K-NN 
