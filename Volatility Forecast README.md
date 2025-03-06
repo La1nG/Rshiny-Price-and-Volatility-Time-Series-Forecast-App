@@ -20,10 +20,14 @@ Time series forecasting is a quantitative meathod of analysing data over periods
 ## sGARCH, eGARCH, gjrGARCH
 
 ### sGARCH
+The standard GARCH model extends the traditional ARCH model by allowing volatility to depend on both past squared shocks (ARCH term) and past volatility (GARCH term), this sGARCH model assumes symmetric reponses to positive and negative shocks.
 
 ### eGARCH
+Unlike sGARCH, eGARCH extends to capture asymmetry using a logarithmic transformation, such as that large negative shocks increase volatility more than large than large positive shocks (large shocks have a exponential impact on volatility). 
 
 ### gjrGARCH
+GJR-GARCH is also a modified version of the sGARCH function that seeks to capture asymmetry (large shocks have a quadratic impact on volatility), however, instead of using logarithms to capture the effect, GJR-GARCH uses an indicator function rather than log variance.
+
 
 ## K-NN 
 K-NN (k-nearest neighbors) is a regression and classification model that predicts a target value by averaging the values of its nearest neighbours (data-points of an applied input). K-NN is a non-parametric and instance-based learning algorithm that can learn when a test-point is provided, making it effective for continuous and non linear data predictions. In this app K-NN is used to forecast returns based on lagged returns and volatility (supported by GARCH) and how RMSE changes with different k values.
