@@ -15,10 +15,126 @@ library(TTR)
 library(zoo)
 library(fredr)
 library(torch)
+library(glmnet)  # For ridge regression
+library(tseries)  # For adf.test
+library(caret)    # For findCorrelation
 
-source("app.r") # Data Acquisition & Preprocessing Module
+# Set FRED API Key
+fredr_set_key("YOUR_FRED_API_KEY") # Fed Reserve of St Louis API key
 
-library(torch)
+# Data Processing Functions ---------------------------------------------------
+
+impute_ts_data <- function(series, method = "locf") {
+  series <- as.numeric(series)
+  if (all(is.na(series))) return(rep(0, length(series)))
+  na_mask <- is.na(series)
+  
+  if (method == "locf") {
+    series <- na.locf(series, na.rm = FALSE)
+    series <- na.locf(series, fromLast = TRUE, na.rm = FALSE)
+  } else if (method == "interpolate") {
+    series <- na.approx(series, na.rm = FALSE)
+    series <- na.locf(series, na.rm = FALSE)
+    series <- na.locf(series, fromLast = TRUE, na.rm = FALSE)
+  } else if (method == "ma") {
+    series <- na.ma(series, k = 3, weighting = "simple")
+  }
+  
+  series[is.na(series)] <- median(series, na.rm = TRUE)
+  stopifnot(length(series) == length(na_mask))
+  return(series)
+}
+
+fetch_inflation_data <- function(start_date, end_date) {
+  fredr(
+    series_id = "CPIAUCSL",
+    observation_start = start_date,
+    observation_end = end_date,
+    frequency = "m"
+  ) %>%
+    select(date, value) %>%
+    rename(Date = date, Inflation = value) %>%
+    mutate(Inflation = Inflation / 100)
+}
+
+fetch_volatility_data <- function(start_date, end_date) {
+  fredr(
+    series_id = "VIXCLS",
+    observation_start = start_date,
+    observation_end = end_date,
+    frequency = "d"
+  ) %>%
+    select(date, value) %>%
+    rename(Date = date, Volatility = value) %>%
+    mutate(Volatility = Volatility / 100)
+}
+
+fetch_volume_data <- function(symbol, start_date, end_date) {
+  tryCatch({
+    if (grepl("^[A-Z]+$", symbol)) {
+      price_data <- getSymbols(symbol, src = "yahoo", 
+                               from = start_date, 
+                               to = end_date, 
+                               auto.assign = FALSE)
+      close_col <- paste0(symbol, ".Close")
+      volume_col <- paste0(symbol, ".Volume")
+      
+      data.frame(
+        Date = index(price_data),
+        Price = as.numeric(price_data[, close_col]),
+        Volume = as.numeric(price_data[, volume_col])
+      )
+    } else {
+      data.frame(
+        Date = seq(as.Date(start_date), as.Date(end_date), by = "day"),
+        Price = NA,
+        Volume = NA
+      )
+    }
+  }, error = function(e) {
+    data.frame(
+      Date = seq(as.Date(start_date), as.Date(end_date), by = "day"),
+      Price = NA,
+      Volume = NA
+    )
+  }) %>%
+    rename(Date = Date, Price = Price, Volume = Volume)
+}
+
+merge_exogenous_data <- function(price_data, inflation_data) {
+  merged_data <- left_join(price_data, inflation_data, by = "Date") %>%
+    select(Date, Symbol, Price, everything())
+  
+  merged_data <- merged_data %>%
+    arrange(Date) %>%
+    mutate(Inflation = na.approx(Inflation, na.rm = FALSE, rule = 2)) %>%
+    fill(Inflation, .direction = "downup")
+  
+  merged_data$Inflation[is.na(merged_data$Inflation)] <- 0
+  return(merged_data)
+}
+
+process_price_series <- function(series, transformation) {
+  series <- as.numeric(series)
+  if (transformation == "Log Prices") {
+    series <- log(series)
+  } else if (transformation == "Log Returns") {
+    series <- diff(log(series))
+    series <- na.omit(series)
+  }
+  return(series)
+}
+
+invert_transformation <- function(predictions, last_observed, transformation) {
+  if (transformation == "Log Prices") {
+    predictions <- exp(predictions)
+  } else if (transformation == "Log Returns") {
+    predictions <- last_observed * exp(cumsum(predictions))
+  }
+  return(predictions)
+}
+
+# Model Definitions -----------------------------------------------------------
 
 Seq2SeqLSTM <- nn_module(
   initialize = function(input_size, hidden_size, output_steps) {
@@ -28,16 +144,10 @@ Seq2SeqLSTM <- nn_module(
   forward = function(x) {
     out <- self$lstm(x)
     last_output <- out[[1]][, dim(out[[1]])[2], , drop = FALSE]
-    final_output <- self$fc(last_output$squeeze(2)) # remove unnecessary dimensions
+    final_output <- self$fc(last_output$squeeze(2))
     final_output
   }
 )
-
-
-model <- Seq2SeqLSTM(input_size = 1, hidden_size = 32, output_steps = 10)
-x <- torch_randn(c(5, 15, 1))
-output <- model(x)
-print(output)
 
 normalize_series <- function(series) {
   min_val <- min(series, na.rm = TRUE)
@@ -47,68 +157,256 @@ normalize_series <- function(series) {
 }
 
 denormalize_series <- function(scaled_series, min_val, max_val) {
-  denormalized <- scaled_series * (max_val - min_val) + min_val
-  denormalized
+  scaled_series * (max_val - min_val) + min_val
 }
 
-calculate_metrics <- function(actual, predicted) {
-  rmse <- sqrt(mean((actual - predicted)^2, na.rm = TRUE))
-  mape <- mean(abs((actual - predicted) / actual) * 100, na.rm = TRUE)
-  list(RMSE = rmse, MAPE = mape)
-}
+# Forecasting Functions -------------------------------------------------------
 
-# Preprocess prices based on user's choice
-process_price_series <- function(series, transformation) {
-  series <- as.numeric(series)
-  if (transformation == "Log Prices") {
-    series <- log(series)
-  } else if (transformation == "Log Returns") {
-    series <- diff(log(series))
-    series <- na.omit(series)  # Remove NA introduced by differencing
-  }
-  return(series)
-}
-
-# Convert predictions back to original price space
-invert_transformation <- function(predictions, last_observed, transformation) {
-  if (transformation == "Log Prices") {
-    predictions <- exp(predictions)
-  } else if (transformation == "Log Returns") {
-    # Reconstruct price series from returns
-    predictions <- last_observed * exp(cumsum(predictions))
-  }
-  return(predictions)
-}
-
-# Updated Metrics to evaluate in original space 
-calculate_metrics <- function(actual, predicted, transformation) {
-  if (transformation == "Log Returns") {
-    # Convert log returns to price level 
-    actual <- exp(cumsum(actual))
-    predicted <- exp(cumsum(predicted))
-  } else if (transformation == "Log Prices") {
-    actual <- exp(actual)
-    predicted <- exp(predicted)
-  }
-  rmse <- sqrt(mean((actual - predicted)^2, na.rm = TRUE))
-  mape <- mean(abs((actual - predicted) / actual) * 100, na.rm = TRUE)
-  list(RMSE = rmse, MAPE = mape)
-}
-
-
-forecast_seq2seq_lstm_with_metrics <- function(series, h, transformation, input_size = 1, hidden_size = 32, 
-                                               window_size = 15, epochs = 100, patience = 20, 
-                                               learning_rate = 0.0005) {
-  series <- as.numeric(series)
-  series_len <- length(series)
-  
-  if (series_len <= window_size + h) {
-    stop("Series length must be greater than window size + forecast horizon (h).")
+forecast_arimax <- function(train_series, test_series, exog_train, exog_test, h) {
+  validate_exog <- function(x) {
+    x <- as.data.frame(x)
+    sd_check <- apply(x, 2, sd, na.rm = TRUE)
+    constant_cols <- which(sd_check < 1e-5 | is.na(sd_check))
+    if (length(constant_cols) > 0) {
+      message("Removed constant columns: ", paste(names(x)[constant_cols], collapse=", "))
+      x <- x[, -constant_cols, drop = FALSE]
+    }
+    x[is.na(x)] <- 0
+    as.matrix(x)
   }
   
-  train_size <- series_len - h
-  train_series <- series[1:train_size]
-  test_series <- series[(train_size + 1):series_len]
+  exog_train <- validate_exog(exog_train)
+  exog_test <- validate_exog(exog_test)
+  
+  handle_differencing <- function(series, exog) {
+    tryCatch({
+      adf_test <- adf.test(na.omit(series))
+      if (adf_test$p.value > 0.05) {
+        message("Applying differencing (d=1)")
+        return(list(
+          series = diff(series),
+          exog = exog[-1,, drop = FALSE]
+        ))
+      }
+      list(series = series, exog = exog)
+    }, error = function(e) {
+      list(series = series, exog = exog)
+    })
+  }
+  
+  transformed <- handle_differencing(train_series, exog_train)
+  train_series <- transformed$series
+  exog_train <- transformed$exog
+  
+  if (ncol(exog_train) > 1) {
+    cor_matrix <- tryCatch({
+      cor(exog_train)
+    }, error = function(e) {
+      matrix(1, ncol(exog_train), ncol(exog_train))
+    })
+    
+    collinear_cols <- findCorrelation(cor_matrix, cutoff = 0.9)
+    if (length(collinear_cols) > 0) {
+      message("Removed collinear columns: ", collinear_cols)
+      exog_train <- exog_train[, -collinear_cols, drop = FALSE]
+      exog_test <- exog_test[, -collinear_cols, drop = FALSE]
+    }
+  }
+  
+  if (ncol(exog_train) == 0) {
+    message("No valid exogenous variables remaining - using ARIMA")
+    arima_model <- auto.arima(train_series)
+    forecast_result <- forecast(arima_model, h = h)
+    return(list(
+      predicted = as.numeric(forecast_result$mean),
+      residuals = residuals(arima_model)
+    ))
+  }
+  
+  tryCatch({
+    arimax_model <- auto.arima(
+      train_series,
+      xreg = exog_train,
+      stepwise = FALSE,
+      approximation = FALSE,
+      seasonal = FALSE,
+      trace = TRUE,
+      max.order = 7,
+      allowdrift = TRUE,
+      allowmean = TRUE
+    )
+    
+    message("\nSelected model: ", arimaorder(arimax_model))
+    checkresiduals(arimax_model)
+    cat("\nModel summary:\n")
+    print(summary(arimax_model))
+    
+    forecast_result <- forecast(
+      arimax_model,
+      h = h,
+      xreg = exog_test[1:h,, drop = FALSE]
+    )
+    
+    list(
+      predicted = as.numeric(forecast_result$mean),
+      residuals = residuals(arimax_model)
+    )
+  }, error = function(e) {
+    message("ARIMAX failed (", e$message, "), falling back to linear regression")
+    lm_model <- lm(train_series ~ exog_train)
+    lm_pred <- predict(lm_model, newdata = data.frame(exog_train = exog_test[1:h,]))
+    
+    list(
+      predicted = as.numeric(lm_pred),
+      residuals = residuals(lm_model)
+    )
+  })
+}
+
+forecast_bsts <- function(train_series, test_series, exog_train, exog_test, h) {
+  cat("Debug - forecast_bsts - train_series length:", length(train_series), 
+      "exog_train rows:", nrow(exog_train), "\n")
+  
+  if (length(train_series) == 0 || nrow(exog_train) == 0) {
+    stop("Empty input series provided to forecast_bsts")
+  }
+  
+  if (any(is.na(train_series))) {
+    cat("Warning: NAs detected in train_series, removing them\n")
+    valid_indices <- which(!is.na(train_series))
+    train_series <- train_series[valid_indices]
+    exog_train <- exog_train[valid_indices, , drop = FALSE]
+  }
+  
+  exog_train <- as.data.frame(lapply(exog_train, function(col) impute_ts_data(col)))
+  exog_test <- as.data.frame(lapply(exog_test, function(col) impute_ts_data(col)))
+  
+  if (nrow(exog_test) < h) {
+    last_row <- tail(exog_test, 1)
+    exog_test <- rbind(exog_test, do.call(rbind, replicate(h - nrow(exog_test), last_row, simplify = FALSE)))
+  } else if (nrow(exog_test) > h) {
+    exog_test <- head(exog_test, h)
+  }
+  
+  exog_train_df <- as.data.frame(exog_train)
+  colnames(exog_train_df) <- colnames(exog_train)
+  newdata_df <- as.data.frame(exog_test)
+  colnames(newdata_df) <- colnames(exog_test)
+  
+  tryCatch({
+    state_spec <- AddLocalLinearTrend(list(), train_series)
+    bsts_formula <- as.formula(paste("train_series ~", paste(colnames(exog_train_df), collapse = " + ")))
+    bsts_model <- bsts(bsts_formula, data = exog_train_df, 
+                       state.specification = state_spec, niter = 5000)
+    
+    bsts_residuals <- colMeans(residuals(bsts_model))
+    
+    bsts_pred <- predict(bsts_model, horizon = h, newdata = newdata_df)
+    list(
+      predicted = as.numeric(bsts_pred$mean),
+      residuals = bsts_residuals
+    )
+  }, error = function(e) {
+    cat("BSTS Error:", e$message, "\n")
+    list(
+      predicted = rep(mean(train_series), h),
+      residuals = rep(0, length(train_series))
+    )
+  })
+}
+
+forecast_prophet <- function(train_series, test_series, train_dates, test_dates, exog_train, exog_test, h) {
+  if (!requireNamespace("prophet", quietly = TRUE)) {
+    return(list(predicted = rep(mean(train_series), h), residuals = rep(0, length(train_series))))
+  }
+  
+  prophet_df <- data.frame(ds = train_dates, y = train_series)
+  if (!is.null(exog_train) && ncol(exog_train) > 0) {
+    for (col in colnames(exog_train)) {
+      prophet_df[[col]] <- exog_train[[col]]
+    }
+  }
+  
+  future_df <- data.frame(ds = test_dates)
+  if (!is.null(exog_test) && ncol(exog_test) > 0) {
+    for (col in colnames(exog_test)) {
+      future_df[[col]] <- exog_test[[col]]
+    }
+  }
+  
+  tryCatch({
+    model <- prophet::prophet()
+    if (!is.null(exog_train) && ncol(exog_train) > 0) {
+      for (col in colnames(exog_train)) {
+        model <- prophet::add_regressor(model, col)
+      }
+    }
+    model <- prophet::fit.prophet(model, prophet_df)
+    forecast <- predict(model, future_df)
+    fitted <- predict(model, prophet_df)
+    residuals <- prophet_df$y - fitted$yhat
+    list(predicted = forecast$yhat[1:h], residuals = residuals)
+  }, error = function(e) {
+    list(predicted = rep(mean(train_series), h), residuals = rep(0, length(train_series)))
+  })
+}
+
+forecast_xgboost <- function(train_series, test_series, exog_train, exog_test, lookback, h) {
+  if (!requireNamespace("xgboost", quietly = TRUE)) {
+    return(list(predicted = rep(mean(train_series), h), residuals = rep(0, length(train_series))))
+  }
+  
+  create_features <- function(series, lags, exog = NULL) {
+    n <- length(series)
+    features <- matrix(NA, nrow = n, ncol = lags)
+    for (i in 1:lags) {
+      features[, i] <- c(rep(NA, i), series[1:(n - i)])
+    }
+    if (!is.null(exog)) {
+      features <- cbind(features, as.matrix(exog))
+    }
+    complete_rows <- complete.cases(features)
+    list(x = features[complete_rows, ], y = series[complete_rows])
+  }
+  
+  train_data <- create_features(train_series, lookback, exog_train)
+  tryCatch({
+    model <- xgboost::xgboost(data = train_data$x, label = train_data$y, nrounds = 100, verbose = 0)
+    predictions <- numeric(h)
+    current_window <- tail(train_series, lookback)
+    
+    for (i in 1:h) {
+      features <- current_window
+      if (!is.null(exog_test) && nrow(exog_test) >= i) {
+        exog_features <- as.numeric(exog_test[i, ])
+        feature_vector <- c(features, exog_features)
+      } else {
+        feature_vector <- features
+      }
+      predictions[i] <- predict(model, matrix(feature_vector, nrow = 1))
+      current_window <- c(current_window[-1], predictions[i])
+    }
+    
+    fitted <- predict(model, train_data$x)
+    residuals <- train_data$y - fitted
+    padded_residuals <- rep(0, length(train_series))
+    idx_start <- length(train_series) - length(residuals) + 1
+    padded_residuals[idx_start:length(train_series)] <- residuals
+    
+    list(predicted = predictions[1:h], residuals = padded_residuals)
+  }, error = function(e) {
+    list(predicted = rep(mean(train_series), h), residuals = rep(0, length(train_series)))
+  })
+}
+
+forecast_lstm <- function(train_series, test_series, exog_train, exog_test, 
+                          window_size = 15, h, epochs = 100) {
+  cat("Debug - forecast_lstm - train_series length:", length(train_series), "\n")
+  
+  if (length(train_series) < window_size + 1) {
+    stop(paste("Error: Insufficient data for LSTM. Needed:", window_size + 1, 
+               "Got:", length(train_series)))
+  }
   
   norm <- normalize_series(train_series)
   price_tensor <- torch_tensor(norm$scaled, dtype = torch_float32(), device = "cpu")
@@ -116,94 +414,142 @@ forecast_seq2seq_lstm_with_metrics <- function(series, h, transformation, input_
   X_train <- list()
   y_train <- list()
   
-  valid_samples <- 0
-  for (i in seq_len(train_size - window_size - h + 1)) {
-    X_train[[valid_samples + 1]] <- price_tensor[i:(i + window_size - 1)]$unsqueeze(1L)$unsqueeze(1L)
-    y_train[[valid_samples + 1]] <- price_tensor[(i + window_size):(i + window_size + h - 1)]
-    valid_samples <- valid_samples + 1
+  for (i in seq_len(length(train_series) - window_size)) {
+    X_train[[i]] <- price_tensor[i:(i + window_size - 1)]$unsqueeze(1L)$unsqueeze(1L)
+    y_train[[i]] <- price_tensor[(i + window_size)]$unsqueeze(1L)
   }
   
-  if (valid_samples == 0) {
-    stop("Insufficient training samples.")
-  }
+  cat("Debug - Created", length(X_train), "training sequences for LSTM\n")
   
   X_price_tensor <- torch_stack(X_train, dim = 1L)$squeeze(1L)$to(device = "cpu")
-  y_price_tensor <- torch_stack(y_train, dim = 1L)$squeeze(1L)$to(device = "cpu")
+  y_price_tensor <- torch_stack(y_train, dim = 1L)$to(device = "cpu")
   
-  model <- Seq2SeqLSTM(input_size, hidden_size, h)
-  model$to(device = "cpu")
+  model <- nn_module(
+    initialize = function(input_size, hidden_size, output_size) {
+      self$lstm <- nn_lstm(input_size = input_size, hidden_size = hidden_size, batch_first = TRUE)
+      self$fc <- nn_linear(hidden_size, output_size)
+    },
+    forward = function(x) {
+      lstm_out <- self$lstm(x)
+      out <- lstm_out[[1]]
+      out <- out[, dim(out)[2], ]
+      out <- self$fc(out)
+      out
+    }
+  )
+  
+  lstm_model <- model(input_size = 1, hidden_size = 32, output_size = 1)
+  lstm_model$to(device = "cpu")
   
   criterion <- nn_mse_loss()
-  optimizer <- optim_adam(model$parameters, lr = learning_rate)
-  
-  loss_values <- numeric(epochs)
-  best_loss <- Inf
-  epochs_no_improve <- 0
+  optimizer <- optim_adam(lstm_model$parameters, lr = 0.0005)
   
   for (epoch in seq_len(epochs)) {
     optimizer$zero_grad()
-    output <- model(X_price_tensor)
-    
-    if (!all(dim(output) == dim(y_price_tensor))) {
-      stop("Shape mismatch: Output shape is ", paste(dim(output), collapse = "x"),
-           " but target shape is ", paste(dim(y_price_tensor), collapse = "x"))
-    }
-    
+    output <- lstm_model(X_price_tensor)
     loss <- criterion(output, y_price_tensor)
     loss$backward()
     optimizer$step()
     
-    loss_values[epoch] <- loss$item()
-    
-    if (loss$item() < best_loss) {
-      best_loss <- loss$item()
-      epochs_no_improve <- 0
-    } else {
-      epochs_no_improve <- epochs_no_improve + 1
-    }
-    
-    if (epochs_no_improve >= patience) {
-      loss_values <- loss_values[1:epoch]
-      break
+    if (epoch %% 20 == 0) {
+      cat("Epoch:", epoch, "Loss:", as.numeric(loss$item()), "\n")
     }
   }
   
-  if ((train_size - window_size + 1) <= 0) {
-    stop("Window size is too large compared to training size")
+  lstm_model$eval()
+  predictions <- numeric(h)
+  input_seq <- tail(train_series, window_size)
+  
+  for (i in 1:h) {
+    norm_input <- (input_seq - norm$min_val) / (norm$max_val - norm$min_val)
+    input_tensor <- torch_tensor(norm_input, dtype = torch_float32())$unsqueeze(1L)$unsqueeze(1L)$to(device = "cpu")
+    
+    pred <- lstm_model(input_tensor)
+    pred_value <- as.numeric(pred$item())
+    pred_value <- pred_value * (norm$max_val - norm$min_val) + norm$min_val
+    predictions[i] <- pred_value
+    
+    input_seq <- c(input_seq[-1], pred_value)
   }
-  input_seq <- price_tensor[(train_size - window_size + 1):train_size]
   
-  input_tensor <- input_seq$unsqueeze(1L)$unsqueeze(-1)$to(device = "cpu")
-  
-  model$eval()
-  tryCatch({
-    preds_tensor <- model(input_tensor)
-    preds <- as_array(preds_tensor)
-    preds <- as.numeric(preds)
+  fitted_values <- numeric(length(train_series))
+  for (i in (window_size+1):length(train_series)) {
+    input_window <- train_series[(i-window_size):(i-1)]
+    norm_input <- (input_window - norm$min_val) / (norm$max_val - norm$min_val)
+    input_tensor <- torch_tensor(norm_input, dtype = torch_float32())$unsqueeze(1L)$unsqueeze(1L)$to(device = "cpu")
     
-    if (length(preds) != h) {
-      stop("Inference mismatch: Expected ", h, " steps, got ", length(preds))
-    }
-    
-    final_predictions <- denormalize_series(preds, norm$min_val, norm$max_val)
-  }, error = function(e) {
-    print(paste("DEBUG: Inference Error:", conditionMessage(e)))
-    stop("Inference failed during final prediction: ", conditionMessage(e))
-  })
+    pred <- lstm_model(input_tensor)
+    pred_value <- as.numeric(pred$item())
+    fitted_values[i] <- pred_value * (norm$max_val - norm$min_val) + norm$min_val
+  }
   
-  metrics <- calculate_metrics(test_series, final_predictions, transformation)
+  residuals <- train_series - fitted_values
   
   list(
-    predictions = final_predictions,
-    loss_values = loss_values,
-    metrics = metrics,
-    test_series = test_series,
-    train_series = train_series
+    predicted = predictions,
+    residuals = residuals
   )
 }
 
+# Ridge Regression for Hybrid Model -------------------------------------------
+fit_ridge_weighted_hybrid <- function(train_data, validation_data, validation_actual, lambda = 0.1) {
+  cat("Debug - Ridge training data dimensions:", dim(train_data), "\n")
+  cat("Debug - Ridge validation actual length:", length(validation_actual), "\n")
+  
+  if (is.data.frame(train_data)) {
+    train_data <- train_data[, c("ARIMAX", "BSTS", "LSTM"), drop = FALSE]
+  }
+  
+  X <- as.matrix(train_data)
+  y <- as.numeric(validation_actual)
+  
+  min_length <- min(nrow(X), length(y))
+  X <- X[1:min_length, , drop = FALSE]
+  y <- y[1:min_length]
+  
+  ridge_model <- glmnet(X, y, alpha = 0, lambda = lambda)
+  
+  coefs <- as.numeric(coef(ridge_model, s = lambda)[-1])
+  intercept <- as.numeric(coef(ridge_model, s = lambda)[1])
+  
+  cat("Ridge Regression Coefficients:", coefs, "\n")
+  cat("Ridge Regression Intercept:", intercept, "\n")
+  
+  pred_data <- as.matrix(validation_data[, c("ARIMAX", "BSTS", "LSTM"), drop = FALSE])
+  predictions <- pred_data %*% coefs + intercept
+  
+  list(
+    predictions = predictions,
+    coefficients = coefs,
+    intercept = intercept
+  )
+}
+
+calculate_metrics <- function(actual, predicted, transformation, last_observed_price) {
+  # Ensure equal lengths
+  min_length <- min(length(actual), length(predicted))
+  actual <- head(actual, min_length)
+  predicted <- head(predicted, min_length)
+  
+  # Invert transformations if needed
+  if (transformation == "Log Returns") {
+    actual <- invert_transformation(actual, last_observed_price, transformation)
+    predicted <- invert_transformation(predicted, last_observed_price, transformation)
+  } else if (transformation == "Log Prices") {
+    actual <- invert_transformation(actual, last_observed_price, transformation)
+    predicted <- invert_transformation(predicted, last_observed_price, transformation)
+  }
+  
+  epsilon <- 1e-8
+  rmse <- sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+  mape <- mean(abs((actual - predicted) / (actual + epsilon)) * 100, na.rm = TRUE)
+  
+  list(RMSE = rmse, MAPE = mape)
+}
+
+# UI Components ---------------------------------------------------------------
 ui <- dashboardPage(
-  dashboardHeader(title = "Asset Forecasting App"),
+  dashboardHeader(title = "Advanced Asset Forecasting App"),
   dashboardSidebar(
     textInput("symbol", "Symbols (comma-separated)", "AAPL"),
     selectInput("asset_type", "Asset Type", choices = c("stock", "forex", "crypto", "commodity", "index")),
@@ -213,272 +559,527 @@ ui <- dashboardPage(
     numericInput("epochs", "Epochs", 100, min = 1),
     numericInput("hidden_size", "Hidden Size", 128, min = 1),
     numericInput("window_size", "Window Size", 30, min = 1),
+    numericInput("lambda", "Ridge Lambda", 0.1, min = 0.001, max = 10),
     actionButton("fetch_data", "Fetch Data"),
     actionButton("run_forecast", "Run Forecast"),
     selectInput("price_transformation", "Price Transformation", 
-                choices = c("Regular Prices", "Log Prices", "Log Returns"), selected = "Regular Prices")
+                choices = c("Regular Prices", "Log Prices", "Log Returns"), 
+                selected = "Regular Prices")
   ),
   dashboardBody(
     fluidRow(
       box(plotlyOutput("forecastPlot"), width = 12),
       box(dataTableOutput("table"), width = 12),
-      box(plotlyOutput("lossPlot"), width = 12),
-      box(dataTableOutput("metricsTable"), width = 12)
+      box(plotlyOutput("lossPlot"), width = 12),           
+      box(dataTableOutput("metricsTable"), width = 12),
+      box(plotlyOutput("coefficientsPlot"), width = 12, title = "Ridge Regression Coefficients")
+      # Add more boxes/outputs if needed
     )
   )
 )
 
+# Server Logic ---------------------------------------------------------------
 server <- function(input, output, session) {
   data <- reactiveVal(NULL)
   forecast_results <- reactiveVal(NULL)
+  ridge_coefs <- reactiveVal(NULL)
   
-  # Fetch Data
   observeEvent(input$fetch_data, {
     req(input$symbol, input$start_date, input$end_date)
-    symbols <- strsplit(input$symbol, ",")[[1]] %>% trimws()
+    symbols <- strsplit(as.character(input$symbol), ",")[[1]] %>% trimws()
     
     fetched_data <- lapply(symbols, function(sym) {
-      cat("Fetching data for:", sym, "\n")
-      result <- process_asset_data(sym, input$asset_type, input$start_date, input$end_date)
-      if (is.null(result)) cat("Failed to fetch data for:", sym, "\n")
-      result
+      result <- fetch_volume_data(sym, input$start_date, input$end_date)
+      if (nrow(result) == 0) return(NULL)
+      result <- result %>% mutate(Symbol = sym)
+      
+      inflation_data <- fetch_inflation_data(min(result$Date), max(result$Date))
+      volatility_data <- fetch_volatility_data(min(result$Date), max(result$Date))
+      
+      result <- result %>%
+        left_join(inflation_data, by = "Date") %>%
+        left_join(volatility_data, by = "Date") %>%
+        mutate(
+          Inflation = impute_ts_data(Inflation, "interpolate"),
+          Volatility = impute_ts_data(Volatility, "interpolate"),
+          Volume = impute_ts_data(Volume, "locf")
+        )
+      return(result)
     })
     
     fetched_data <- fetched_data[!sapply(fetched_data, is.null)]
-    
     if (length(fetched_data) == 0) {
-      showNotification("No data could be fetched. Please check the symbols or date range.", type = "error")
-      return(NULL)
+      showNotification("No data fetched. Check symbols/dates.", type = "error")
+      return()
     }
     
     combined_data <- bind_rows(fetched_data)
     data(combined_data)
-    
-    showNotification("Data fetching complete!", type = "message")
+    showNotification("Data fetched successfully!", type = "message")
   })
   
-  # Forecasting Logic
+  # time-series CV function
+  ts_cv <- function(data, initial_window, horizon, step = 1) {
+    n <- length(data)
+    if (initial_window + horizon > n) {
+      stop("Initial window + horizon exceeds data length")
+    }
+    folds <- list()
+    fold_index <- 1
+    for (i in seq(initial_window, n - horizon, by = step)) {
+      train_indices <- 1:i
+      test_indices <- (i + 1):min(i + horizon, n)
+      folds[[fold_index]] <- list(train = train_indices, test = test_indices)
+      fold_index <- fold_index + 1
+    }
+    return(folds)
+  }
+  
   observeEvent(input$run_forecast, {
+    req(data())
     df <- data()
-    req(df)
+    symbols <- unique(df$Symbol)
+    h <- input$forecast_days
+    forecasts <- list()
     
-    forecasts <- lapply(unique(df$Symbol), function(sym) {
-      symbol_df <- df %>% filter(Symbol == sym)
-      transformation <- input$price_transformation
-      price_series <- process_price_series(symbol_df$Price, transformation)
-      last_observed_price <- tail(symbol_df$Price, 1)
-      
-      
-      h <- input$forecast_days
-      train_size <- length(price_series) - h
-      
-      if (train_size <= 0) {
-        showNotification(paste("Not enough data for", sym, "to forecast"), type = "error")
-        return(NULL)
-      }
-      
-      tryCatch({
-        # LSTM Forecast
-        lstm_result <- forecast_seq2seq_lstm_with_metrics(
-          price_series,
-          h,
-          transformation,
-          hidden_size = input$hidden_size,
+    tryCatch({
+      forecasts <- lapply(symbols, function(sym) {
+        symbol_data <- df %>% filter(Symbol == sym)
+        if (nrow(symbol_data) == 0) return(NULL)
+        
+        # checks
+        total_size <- nrow(symbol_data)
+        if (total_size < 30) {
+          showNotification(paste("Not enough data for", sym, "to create forecast"), type = "warning")
+          return(NULL)
+        }
+        
+        processed_data <- symbol_data %>%
+          mutate(
+            Inflation = impute_ts_data(Inflation, "interpolate"),
+            Volatility = impute_ts_data(Volatility, "interpolate"),
+            Volume = impute_ts_data(Volume, "locf")
+          )
+        
+        # Transform price if needed
+        price_series <- process_price_series(processed_data$Price, input$price_transformation)
+        
+        exog_data <- processed_data %>% select(Inflation, Volatility, Volume)
+        
+        # If Log Returns, exog_data should be trimmed
+        if (input$price_transformation == "Log Returns") {
+          exog_data <- tail(exog_data, -1)
+          processed_data <- tail(processed_data, -1)
+        }
+        
+        min_length <- min(length(price_series), nrow(exog_data))
+        price_series <- tail(price_series, min_length)
+        exog_data <- tail(exog_data, min_length)
+        processed_data <- tail(processed_data, min_length)
+        
+        # Quick cross-validation 
+        initial_window <- floor(min_length * 0.7)
+        cv_folds <- ts_cv(price_series, initial_window, horizon = h, step = max(1, floor(h / 2)))
+        
+        if (length(cv_folds) < 2) {
+          # fallback or just 2 folds
+          train_end <- floor(min_length * 0.7)
+          valid_end <- floor(min_length * 0.85)
+          cv_folds <- list(
+            list(train = 1:train_end, test = (train_end+1):valid_end),
+            list(train = 1:valid_end, test = (valid_end+1):min_length)
+          )
+        }
+        
+        cv_results <- list()
+        
+        # CV folds 
+        for (fold_idx in 1:(length(cv_folds)-1)) {
+          fold <- cv_folds[[fold_idx]]
+          train_idx <- fold$train
+          test_idx <- fold$test
+          
+          train_price <- price_series[train_idx]
+          test_price <- price_series[test_idx]
+          
+          train_exog <- exog_data[train_idx, , drop = FALSE]
+          test_exog <- exog_data[test_idx, , drop = FALSE]
+          
+          # ARIMAX forecast
+          arimax_result <- forecast_arimax(
+            train_series = train_price,
+            test_series = test_price,
+            exog_train = train_exog,
+            exog_test = test_exog,
+            h = h
+          )
+          
+          # BSTS forecast
+          bsts_result <- forecast_bsts(
+            train_series = train_price,
+            test_series = test_price,
+            exog_train = train_exog,
+            exog_test = test_exog,
+            h = h
+          )
+          
+          # Prophet forecast
+          prophet_result <- forecast_prophet(
+            train_series = train_price,
+            test_series = test_price,
+            train_dates = processed_data$Date[train_idx],
+            test_dates = processed_data$Date[test_idx],
+            exog_train = train_exog,
+            exog_test = test_exog,
+            h = h
+          )
+          
+          # XGBoost forecast
+          xgboost_result <- forecast_xgboost(
+            train_series = train_price,
+            test_series = test_price,
+            exog_train = train_exog,
+            exog_test = test_exog,
+            lookback = input$window_size,
+            h = h
+          )
+          
+          # LSTM forecast
+          lstm_result <- forecast_lstm(
+            train_series = train_price,
+            test_series = test_price,
+            exog_train = train_exog,
+            exog_test = test_exog,
+            window_size = input$window_size,
+            h = h,
+            epochs = input$epochs
+          )
+          
+          # Debug print
+          print(arimax_result$predicted)
+          print(bsts_result$predicted)
+          print(lstm_result$predicted)
+          
+          if (is.null(arimax_result$predicted) || length(arimax_result$predicted) == 0) {
+            print("ARIMAX predictions missing!")
+          }
+          if (is.null(bsts_result$predicted) || length(bsts_result$predicted) == 0) {
+            print("BSTS predictions missing!")
+          }
+          if (is.null(lstm_result$predicted) || length(lstm_result$predicted) == 0) {
+            print("LSTM predictions missing!")
+          }
+          
+          if (is.null(arimax_result) && is.null(bsts_result) && is.null(lstm_result)) {
+            print(paste("No models generated predictions for", sym))
+            return(NULL)
+          }
+          
+          # Collect fold predictions
+          cv_results[[fold_idx]] <- list(
+            actual = test_price,
+            predictions = data.frame(
+              ARIMAX = arimax_result$predicted,
+              BSTS = bsts_result$predicted,
+              Prophet = prophet_result$predicted,
+              XGBoost = xgboost_result$predicted,
+              LSTM = lstm_result$predicted
+            )
+          )
+        }
+        
+        # Combine CV results
+        all_predictions <- do.call(rbind, lapply(cv_results, function(x) x$predictions))
+        all_actuals <- unlist(lapply(cv_results, function(x) x$actual))
+        
+        # Simple search for best lambda
+        lambda_grid <- 10^seq(-3, 3, length.out = 20)
+        best_lambda <- lambda_grid[1]
+        best_rmse <- Inf
+        lambda_errors <- numeric(length(lambda_grid))
+        
+        for (i in seq_along(lambda_grid)) {
+          lam <- lambda_grid[i]
+          k <- 5
+          fold_size <- max(1, floor(length(all_actuals) / k))
+          cv_errors <- numeric(k)
+          
+          for (fold_i in 1:k) {
+            start_idx <- (fold_i - 1) * fold_size + 1
+            end_idx <- min(fold_i * fold_size, length(all_actuals))
+            if (start_idx > length(all_actuals)) break
+            
+            val_idx <- start_idx:end_idx
+            train_idx <- setdiff(seq_along(all_actuals), val_idx)
+            
+            ridge_mod <- glmnet(
+              x = as.matrix(all_predictions[train_idx, ]),
+              y = all_actuals[train_idx],
+              alpha = 0,
+              lambda = lam,
+              standardize = TRUE
+            )
+            
+            val_pred <- predict(ridge_mod, as.matrix(all_predictions[val_idx, ]))
+            cv_errors[fold_i] <- sqrt(mean((val_pred - all_actuals[val_idx])^2, na.rm = TRUE))
+          }
+          
+          lambda_errors[i] <- mean(cv_errors, na.rm = TRUE)
+        }
+        
+        if (!all(is.na(lambda_errors))) {
+          best_lambda <- lambda_grid[which.min(lambda_errors)]
+        }
+        
+        # Final ridge model
+        final_predictions <- as.matrix(all_predictions)
+        final_actuals <- all_actuals
+        
+        final_ridge_model <- glmnet(
+          x = final_predictions,
+          y = final_actuals,
+          alpha = 0,
+          lambda = best_lambda
+        )
+        
+        ridge_coefs_values <- as.numeric(coef(final_ridge_model))[-1]
+        intercept_val <- as.numeric(coef(final_ridge_model))[1]
+        
+        hybrid_ridge_forecast <- predict(final_ridge_model, newx = final_predictions)
+        
+        # Example: define last_observed_price for metrics
+        last_observed_price <- tail(processed_data$Price, 1)
+        
+        # Suppose the last fold is used as "final" test
+        last_fold <- cv_folds[[length(cv_folds)]]
+        test_price <- price_series[last_fold$test]
+        
+        # run the final forecasts with the full training set
+        arimax_result <- forecast_arimax(
+          train_series = price_series,
+          test_series = NULL,
+          exog_train = exog_data,
+          exog_test = NULL,
+          h = h
+        )
+        bsts_result <- forecast_bsts(
+          train_series = price_series,
+          test_series = NULL,
+          exog_train = exog_data,
+          exog_test = NULL,
+          h = h
+        )
+        prophet_result <- forecast_prophet(
+          train_series = price_series,
+          test_series = NULL,
+          train_dates = processed_data$Date,
+          test_dates = seq.Date(max(processed_data$Date) + 1, by = "day", length.out = h),
+          exog_train = exog_data,
+          exog_test = tail(exog_data, h),  # or some approach
+          h = h
+        )
+        xgboost_result <- forecast_xgboost(
+          train_series = price_series,
+          test_series = NULL,
+          exog_train = exog_data,
+          exog_test = tail(exog_data, h),
+          lookback = input$window_size,
+          h = h
+        )
+        lstm_result <- forecast_lstm(
+          train_series = price_series,
+          test_series = NULL,
+          exog_train = exog_data,
+          exog_test = tail(exog_data, h),
           window_size = input$window_size,
+          h = h,
           epochs = input$epochs
         )
         
-        lstm_result$predictions <- invert_transformation(lstm_result$predictions, last_observed_price, transformation)
-        lstm_result$metrics <- calculate_metrics(
-          symbol_df$Price[(train_size + 1):nrow(symbol_df)],
-          lstm_result$predictions,
-          transformation
-        )
+        # Summarize final metrics
+        metrics <- NULL
+        if (length(test_price) >= h) {
+          metrics <- list(
+            ARIMAX = calculate_metrics(test_price, arimax_result$predicted, 
+                                       input$price_transformation, last_observed_price),
+            BSTS = calculate_metrics(test_price, bsts_result$predicted, 
+                                     input$price_transformation, last_observed_price),
+            Prophet = calculate_metrics(test_price, prophet_result$predicted, 
+                                        input$price_transformation, last_observed_price),
+            XGBoost = calculate_metrics(test_price, xgboost_result$predicted, 
+                                        input$price_transformation, last_observed_price),
+            LSTM = calculate_metrics(test_price, lstm_result$predicted, 
+                                     input$price_transformation, last_observed_price),
+            Hybrid_Ridge = calculate_metrics(test_price, hybrid_ridge_forecast[1:h], 
+                                             input$price_transformation, last_observed_price)
+          )
+        }
         
-        
-        # ARIMA Forecast
-        arima_model <- auto.arima(price_series[1:train_size])
-        arima_forecast <- forecast(arima_model, h = h)
-        arima_predicted <- as.numeric(arima_forecast$mean)
-        arima_predicted <- invert_transformation(arima_predicted, last_observed_price, transformation)
-        arima_metrics <- calculate_metrics(symbol_df$Price[(train_size + 1):nrow(symbol_df)], arima_predicted, transformation)
-        arima_result <- list(predicted = arima_predicted, metrics = arima_metrics)
-        
-        # BSTS Forecast
-        state_spec <- AddLocalLinearTrend(list(), price_series[1:train_size])
-        bsts_model <- bsts(price_series[1:train_size], state.specification = state_spec, niter = 5000)
-        bsts_forecast <- predict(bsts_model, horizon = h)
-        bsts_predicted <- as.numeric(bsts_forecast$mean)
-        bsts_predicted <- invert_transformation(bsts_predicted, last_observed_price, transformation)
-        bsts_metrics <- calculate_metrics(symbol_df$Price[(train_size + 1):nrow(symbol_df)], bsts_predicted, transformation)
-        bsts_result <- list(predicted = bsts_predicted, metrics = bsts_metrics)
-        
-        # Hybrid Ensemble Forecast
-        hybrid_predicted <- (lstm_result$predictions + arima_predicted + bsts_predicted) / 3
-        hybrid_metrics <- calculate_metrics(
-          symbol_df$Price[(train_size + 1):nrow(symbol_df)],
-          hybrid_predicted,
-          transformation
-        )
-        hybrid_result <- list(predicted = hybrid_predicted, metrics = hybrid_metrics)
-        
-        # Bundle results per symbol
         list(
           Symbol = sym,
-          LSTM = lstm_result,
-          ARIMA = arima_result,
-          BSTS = bsts_result,
-          Hybrid = hybrid_result
+          Predictions = list(
+            ARIMAX = arimax_result$predicted,
+            BSTS = bsts_result$predicted,
+            Prophet = prophet_result$predicted,
+            XGBoost = xgboost_result$predicted,
+            LSTM = lstm_result$predicted,
+            Hybrid_Ridge = hybrid_ridge_forecast[1:h]
+          ),
+          Metrics = metrics,
+          Components = colnames(all_predictions),
+          Coefficients = ridge_coefs_values,
+          Lambda = best_lambda
         )
-      }, error = function(e) {
-        showNotification(paste("Forecasting failed for", sym, ":", conditionMessage(e)), type = "error")
-        print(e)
-        return(NULL)
       })
+      
+      forecast_results(forecasts[!sapply(forecasts, is.null)])
+      
+    }, error = function(e) {
+      showNotification(paste("Forecasting error:", e$message), type = "error")
     })
-    
-    forecasts <- forecasts[!sapply(forecasts, is.null)]
-    forecast_results(forecasts)
   })
-  
-  
-  
-  # Render Data Table
-  output$table <- renderDataTable({
-    df <- data()
-    req(df)
-    df
-  })
-  
-  # Multi-Model Forecast Plot Integration for ARIMA, BSTS, Hybrid with LSTM
   
   output$forecastPlot <- renderPlotly({
+    req(forecast_results(), data())
+    
+    forecasts_list <- forecast_results()
+    validate(need(length(forecasts_list) > 0, "No forecast results available"))
+    
+    # Use the first symbol's forecast as an example
+    fr <- forecasts_list[[1]]
+    validate(need(!is.null(fr$Predictions), "No predictions found"))
+    
     df <- data()
-    forecasts <- forecast_results()
-    transformation <- input$price_transformation
-    req(df, forecasts, transformation)
+    symbol_df <- df %>% filter(Symbol == fr$Symbol)
     
-    if (length(forecasts) == 0) {
-      showNotification("No forecasts available for plotting.", type = "error")
-      return(NULL)
+    # Generate future dates
+    forecast_length <- min(input$forecast_days, length(fr$Predictions$ARIMAX))
+    last_date <- max(symbol_df$Date, na.rm = TRUE)
+    future_dates <- seq.Date(last_date + 1, by = "day", length.out = forecast_length)
+    
+    plot_data <- tibble(
+      Date = c(symbol_df$Date, future_dates),
+      Actual = c(symbol_df$Price, rep(NA, forecast_length))
+    )
+    
+    # Add each model’s predictions
+    for (model in names(fr$Predictions)) {
+      pred_values <- fr$Predictions[[model]]
+      if (!is.null(pred_values) && length(pred_values) >= forecast_length) {
+        plot_data[[model]] <- c(rep(NA, nrow(symbol_df)), pred_values[1:forecast_length])
+      }
     }
     
-    first_forecast <- forecasts[[1]]
-    lstm_result <- first_forecast$LSTM
-    arima_result <- first_forecast$ARIMA
-    bsts_result <- first_forecast$BSTS
-    hybrid_result <- first_forecast$Hybrid
+    model_colors <- c(
+      "ARIMAX" = "red", 
+      "BSTS" = "green", 
+      "Prophet" = "purple",
+      "XGBoost" = "brown", 
+      "LSTM" = "orange", 
+      "Hybrid_Ridge" = "black"
+    )
+    model_dash <- c(
+      "ARIMAX" = "dot", 
+      "BSTS" = "dash", 
+      "Prophet" = "dashdot",
+      "XGBoost" = "longdash", 
+      "LSTM" = "dot",
+      "Hybrid_Ridge" = "solid"
+    )
     
-    req(lstm_result, arima_result, bsts_result, hybrid_result)
+    p <- plot_ly(plot_data, x = ~Date) %>%
+      add_lines(y = ~Actual, name = "Actual", line = list(color = "blue", width = 3))
     
-    train_size <- length(lstm_result$train_series)
-    h <- length(lstm_result$predictions)
+    for (model in names(fr$Predictions)) {
+      if (!is.null(plot_data[[model]])) {
+        p <- p %>% add_lines(
+          y = as.formula(paste0("~", model)),
+          name = model,
+          line = list(
+            color = model_colors[model],
+            dash = model_dash[model],
+            width = ifelse(model == "Hybrid_Ridge", 4, 2)
+          )
+        )
+      }
+    }
     
-    last_date <- max(df$Date, na.rm = TRUE)
-    future_dates <- seq.Date(last_date + 1, by = "day", length.out = h)
-    
-    lstm_forecast <- as.numeric(lstm_result$predictions)
-    arima_forecast <- as.numeric(arima_result$predicted)
-    bsts_forecast <- as.numeric(bsts_result$predicted)
-    hybrid_forecast <- as.numeric(hybrid_result$predicted)
-    
-    min_h <- min(length(lstm_forecast), length(arima_forecast), length(bsts_forecast), length(hybrid_forecast), length(future_dates))
-    lstm_forecast <- lstm_forecast[1:min_h]
-    arima_forecast <- arima_forecast[1:min_h]
-    bsts_forecast <- bsts_forecast[1:min_h]
-    hybrid_forecast <- hybrid_forecast[1:min_h]
-    future_dates <- future_dates[1:min_h]
-    
-    y_axis_label <- switch(transformation,
-                           "Regular Prices" = "Price",
-                           "Log Prices" = "Log Price",
-                           "Log Returns" = "Log Return")
-    
-    plot_ly() %>%
-      add_lines(
-        x = df$Date,
-        y = df$Price,
-        name = "Actual Price",
-        line = list(color = 'blue')
-      ) %>%
-      add_lines(
-        x = future_dates,
-        y = lstm_forecast,
-        name = "LSTM Forecast",
-        line = list(color = 'red', dash = 'dot')
-      ) %>%
-      add_lines(
-        x = future_dates,
-        y = arima_forecast,
-        name = "ARIMA Forecast",
-        line = list(color = 'green', dash = 'dash')
-      ) %>%
-      add_lines(
-        x = future_dates,
-        y = bsts_forecast,
-        name = "BSTS Forecast",
-        line = list(color = 'purple', dash = 'dashdot')
-      ) %>%
-      add_lines(
-        x = future_dates,
-        y = hybrid_forecast,
-        name = "Hybrid Ensemble",
-        line = list(color = 'black', dash = 'solid')
-      ) %>%
-      layout(
-        title = paste("Multi-Model Forecast for", first_forecast$Symbol),
-        xaxis = list(title = "Date"),
-        yaxis = list(title = y_axis_label),
-        legend = list(x = 0.01, y = 0.99)
-      )
+    p %>% layout(
+      title = paste("Forecast for", fr$Symbol),
+      xaxis = list(title = "Date"),
+      yaxis = list(title = "Price"),
+      hovermode = "x unified"
+    )
   })
-
-
-  # Plot LSTM Loss Curve
-  output$lossPlot <- renderPlotly({
-    forecasts <- forecast_results()
-    req(forecasts)
-    
-    first_forecast <- forecasts[[1]]
-    req(!is.null(first_forecast$LSTM))
-    
-    lstm_losses <- first_forecast$LSTM$loss_values
-    
-    if (is.null(lstm_losses) || length(lstm_losses) == 0 || all(is.na(lstm_losses))) {
-      showNotification("No valid loss values for plotting.", type = "error")
+  
+  output$table <- renderDataTable({
+    req(data())
+    data() %>%
+      select(Date, Symbol, Price, Inflation, Volatility, Volume) %>%
+      arrange(desc(Date))
+  })
+  
+  output$coefficientsPlot <- renderPlotly({
+    req(ridge_coefs())
+    ridge_info <- ridge_coefs()
+    if (is.null(ridge_info$coefficients) || is.null(ridge_info$components)) {
       return(NULL)
     }
+    
+    coefs_df <- data.frame(
+      Component = ridge_info$components,
+      Coefficient = ridge_info$coefficients
+    ) %>%
+      arrange(desc(abs(Coefficient)))
+    
+    colors <- c("negative" = "rgba(239, 85, 59, 0.8)",
+                "positive" = "rgba(0, 129, 200, 0.8)")
+    color_values <- ifelse(coefs_df$Coefficient < 0, colors["negative"], colors["positive"])
     
     plot_ly(
-      x = seq_along(lstm_losses),
-      y = lstm_losses,
-      type = 'scatter',
-      mode = 'lines',
-      name = "LSTM Loss"
+      coefs_df,
+      x = ~Component,
+      y = ~Coefficient,
+      type = "bar",
+      marker = list(color = color_values)
     ) %>%
-      layout(title = "LSTM Loss Curve")
+      layout(
+        title = paste("Ridge Regression Coefficients (λ =", round(ridge_info$lambda, 4), ")"),
+        xaxis = list(title = "Model Component"),
+        yaxis = list(title = "Weight")
+      )
   })
   
-
-  # Metrics Table
-  
   output$metricsTable <- renderDataTable({
-    forecasts <- forecast_results()
-    req(forecasts)
+    req(forecast_results())
+    fr_list <- forecast_results()
+    if (length(fr_list) == 0) return(NULL)
     
-    metrics_df <- map_dfr(forecasts, ~{
-      tibble(
-        Symbol = .x$Symbol,
-        Model = c("LSTM", "ARIMA", "BSTS", "Hybrid"),
-        RMSE = c(.x$LSTM$metrics$RMSE, .x$ARIMA$metrics$RMSE, .x$BSTS$metrics$RMSE, .x$Hybrid$metrics$RMSE),
-        MAPE = c(.x$LSTM$metrics$MAPE, .x$ARIMA$metrics$MAPE, .x$BSTS$metrics$MAPE, .x$Hybrid$metrics$MAPE)
-      )
-    })
-    metrics_df
+    # Combine metrics from each forecast
+    metrics_list <- lapply(fr_list, function(f) {
+      if (is.null(f$Metrics)) return(NULL)
+      models <- names(f$Metrics)
+      # Build a row for each model
+      lapply(models, function(m) {
+        data.frame(
+          Symbol = f$Symbol,
+          Model = m,
+          RMSE = round(f$Metrics[[m]]$RMSE, 4),
+          MAPE = round(f$Metrics[[m]]$MAPE, 2)
+          # Add more columns if your calculate_metrics returns them
+        )
+      }) %>% bind_rows()
+    }) %>% bind_rows()
+    
+    if (is.null(metrics_list) || nrow(metrics_list) == 0) return(NULL)
+    
+    datatable(
+      metrics_list,
+      options = list(pageLength = 10)
+    )
   })
 }
 
-
-
+shinyApp(ui, server)
 
 shinyApp(ui, server)
