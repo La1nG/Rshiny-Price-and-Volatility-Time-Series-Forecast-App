@@ -6,7 +6,6 @@ Working On:
 
 - potential silent model failure in forecast functions
 
-Features:
 
 # Techniques
 
