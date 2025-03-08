@@ -1,0 +1,7 @@
+### To be started section after Price Forecast WIP ###
+
+Planned Features:
+- Probability Calculation of Options achieving ITM at a specified expiration date - Modified Heston's Model
+- Create optimal options strategies given a specified risk level
+- American, European and support for Exotic Options
+- Visualise potential P&L
