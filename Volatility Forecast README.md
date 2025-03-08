@@ -3,7 +3,6 @@
 
 
 ## Features:
-- Comprehensive Deep Learning Price Forecasting using ARIMA, BSTS and LSTM.
 - Dynamic Conditional Correlation (DCC) Analysis with 2 Assets.
 - Multivariate and Univariate Model Analysis with sGARCH, eGARCH, and gjrGARCH.
 - Historical Risk Analysis with VaR and ES.
